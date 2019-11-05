@@ -1003,7 +1003,7 @@ class SSSynth_Content(Model):
 
         if config.f0_mode == "cont":
 
-            audio_out = utils.feats_to_audio(np.concatenate((out_mel[:feats.shape[0]], feats[:,-2:]) , axis = -1))
+            audio_out = utils.feats_to_audio(np.concatenate((out_mel, out_atb, out_vuv) , axis = -1))
             sf.write('./{}_ss_pred.wav'.format(file_name.split('/')[-1][:-4]), audio_out, config.fs)
 
         elif config.f0_mode == "discrete":
@@ -1145,7 +1145,7 @@ class SSSynth_Content(Model):
 
         for in_batch_mel in in_batches_mel :
             # speaker = np.repeat(speaker_index, config.batch_size)
-            speaker_index = config.singers.index('Bria')
+            speaker_index = config.singers.index('Gary')
             speaker_2 = np.repeat(speaker_index, config.batch_size)
             if config.use_speaker:
                 feed_dict = {self.stft_placeholder: in_batch_mel, self.speaker_labels_1: speaker_2, self.is_train: False}
