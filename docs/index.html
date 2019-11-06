@@ -27,8 +27,52 @@
     </center>
 
 
+  <h4>Examples for unison choir singing. The songs and singers singers shown here were not used for the training.</h4>
 
-  <h4>Examples From MedleyDB and a proprietary dataset. The songs and singers singers shown here were not used for the training.</h4>
+  <table>
+
+  <tr>
+    <td width="165px" style="padding-bottom: 40px;"></td>
+    <td width="150px"><b>Unison Mixture</b></td>
+    <td width="150px"><b>Single voice synthesized by SCM model</b></td>
+  </tr>
+    <tr>
+    <td><b>Example 1 (2 singers in unison)</b></td>
+    <td>
+  <audio controls preload="none" >
+  <source src="audio/uni.wav" type="audio/mpeg">
+  Your browser does not support the audio element.
+  </audio>
+    </td>
+
+    <td>
+  <audio controls preload="none">
+  <source src="audio/uni_output.wav" type="audio/wav">
+  Your browser does not support the audio element.
+  </audio>
+    </td>
+  </tr>
+ </table>
+  <table>
+    <tr>
+    <td width="165px"><b>Example 2 (3 singers in unison)</b></td>
+    <td>
+  <audio controls preload="none" >
+  <source src="audio/uni_3.wav" type="audio/mpeg">
+  Your browser does not support the audio element.
+  </audio>
+    </td>
+
+    <td>
+  <audio controls preload="none">
+  <source src="audio/uni_3_output.wav" type="audio/wav">
+  Your browser does not support the audio element.
+  </audio>
+    </td>
+  </tr>
+ </table>
+
+  <h4>Examples from proprietary dataset. The songs and singers singers shown here were not used for the training.</h4>
 <!--   <p> These are examples from the NUS-48E [1] dataset, on which the system was trained and evaluated</p> -->
 
   <table>
@@ -36,11 +80,11 @@
   <tr>
     <td width="165px" style="padding-bottom: 40px;"></td>
     <td width="150px"><b>Mixture of vocals and backing track</b></td>
-    <td width="150px"><b>Vocals output by Wave-U-Net</b></td>
+    <td width="150px"><b>Vocals output by Wave-U-Net[1]</b></td>
     <td width="150px"><b>Vocals Synthesized Using the SCS model, with the target singer set to one of the singers in the training set with the same gender.</b></td>
     <td width="150px"><b>Vocals Synthesized Using the SCM model</b></td>
-    <td width="150px"><b>Vocals Synthesized Using the SS model</b></td>
-    <td width="150px"><b>Vocals Synthesized Using the UNET model</b></td>
+    <td width="150px"><b>Vocals Synthesized Using the SS[2] model</b></td>
+    <td width="150px"><b>Vocals Synthesized Using the UNET[3]model</b></td>
 
 
   </tr>
@@ -312,6 +356,7 @@
   </tr>
 </table>
 
+  <h4>Examples from MedleyDB [4]. The songs and singers singers shown here were not used for the training.</h4>
 
   <table>
 
@@ -506,10 +551,10 @@
 </table>
 
 
-          <p>[1] Duan, Zhiyan, et al. "The NUS sung and spoken lyrics corpus: A quantitative comparison of singing and speech." 2013 Asia-Pacific Signal and Information Processing Association Annual Summit and Conference. IEEE, 2013.</p>
-          <p>[2] Blaauw, Merlijn, and Jordi Bonada. "A Neural Parametric Singing Synthesizer Modeling Timbre and Expression from Natural Songs." Applied Sciences 7.12 (2017): 1313.</p>
-          <p>[3] Blaauw, Merlijn, et al. “Data efficient voice cloning forneural  singing  synthesis,”  in2019  IEEE  International  Conference  onAcoustics, Speech and Signal Processing (ICASSP), 2019.</p>
-
+          <p>[1] Stoller, Daniel, Sebastian Ewert, and Simon Dixon. "Wave-u-net: A multi-scale neural network for end-to-end audio source separation." arXiv preprint arXiv:1806.03185 (2018).</p>
+          <p>[2] Jansson, Andreas, et al. "Singing voice separation with deep U-Net convolutional networks." (2017).</p>
+          <p>[3] Chandna, Pritish, et al. "A Vocoder Based Method for Singing Voice Extraction." ICASSP 2019-2019 IEEE International Conference on Acoustics, Speech and Signal Processing (ICASSP). IEEE, 2019.</p>
+          <p>[4] Bittner, Rachel M., et al. "Medleydb: A multitrack dataset for annotation-intensive mir research." ISMIR. Vol. 14. 2014.</p>
       </div>
       
       <div id="blog-bg-footer">
