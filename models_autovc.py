@@ -1231,7 +1231,707 @@ class SSSynth_Content(Model):
             # elif config.enc_mode == "conv":
             self.vuv = modules.enc_dec_vuv(self.stft_placeholder, self.f0, self.output_stft[:,:,-4:], self.is_train)
 
+class SSSynth(Model):
 
+    def get_optimizers(self):
+        """
+        Returns the optimizers for the model, based on the loss functions and the mode. 
+        """
+        self.harm_params = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES,scope = 'Harm_Model')
+        self.ap_params = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES,scope = 'Ap_Model')
+        self.f0_params = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES,scope = 'F0_Model')
+        self.vuv_params = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES,scope = 'Vuv_Model')
+
+        self.harm_optimizer = tf.train.AdamOptimizer(learning_rate = config.init_lr)
+        self.ap_optimizer = tf.train.AdamOptimizer(learning_rate = config.init_lr)
+        self.f0_optimizer = tf.train.AdamOptimizer(learning_rate = config.init_lr)
+        self.vuv_optimizer = tf.train.AdamOptimizer(learning_rate = config.init_lr)
+
+        self.global_step = tf.Variable(0, name='global_step', trainable=False)
+        self.global_step_ap = tf.Variable(0, name='global_step_ap', trainable=False)
+        self.global_step_f0 = tf.Variable(0, name='global_step_f0', trainable=False)
+        self.global_step_vuv = tf.Variable(0, name='global_step_vuv', trainable=False)
+
+        update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
+        with tf.control_dependencies(update_ops):
+            self.harm_train_function = self.harm_optimizer.minimize(self.loss, global_step = self.global_step, var_list = self.harm_params)
+            self.f0_train_function = self.f0_optimizer.minimize(self.f0_loss, global_step = self.global_step_f0, var_list = self.f0_params)
+            self.vuv_train_function = self.vuv_optimizer.minimize(self.vuv_loss, global_step = self.global_step_vuv, var_list = self.vuv_params)
+
+    def loss_function(self):
+        """
+        returns the loss function for the model, based on the mode. 
+        """
+
+        self.harm_loss = tf.reduce_sum(tf.abs(self.harm - self.harm_placeholder)*np.linspace(1.0,0.7,60))
+
+        self.ap_loss = tf.reduce_sum(tf.abs(self.ap - self.ap_placeholder))
+
+        self.vuv_loss = tf.reduce_mean(tf.reduce_mean(binary_cross(self.vuv_placeholder, self.vuv)))
+
+        if config.f0_mode == "cont":
+
+            self.f0_loss = tf.reduce_sum(tf.abs(self.f0 - self.f0_placeholder)*(1-self.vuv_placeholder)) 
+        elif config.f0_mode == "discrete":
+            self.f0_loss = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(labels= self.f0_placeholder, logits = self.f0))
+
+        self.loss = self.harm_loss + self.ap_loss 
+
+
+
+    def get_summary(self, sess, log_dir):
+        """
+        Gets the summaries and summary writers for the losses.
+        """
+
+        self.harm_summary = tf.summary.scalar('harm_loss', self.harm_loss)
+
+        self.ap_summary = tf.summary.scalar('ap_loss', self.ap_loss)
+
+        self.f0_summary = tf.summary.scalar('f0_loss', self.f0_loss)
+
+        self.vuv_summary = tf.summary.scalar('vuv_loss', self.vuv_loss)
+
+        self.train_summary_writer = tf.summary.FileWriter(log_dir+'train/', sess.graph)
+        self.val_summary_writer = tf.summary.FileWriter(log_dir+'val/', sess.graph)
+        self.summary = tf.summary.merge_all()
+
+    def get_placeholders(self):
+        """
+        Returns the placeholders for the model. 
+        Depending on the mode, can return placeholders for either just the generator or both the generator and discriminator.
+        """
+
+        self.input_placeholder = tf.placeholder(tf.float32, shape=(config.batch_size,config.max_phr_len,config.stft_features),name='input_placeholder')
+        self.harm_placeholder = tf.placeholder(tf.float32, shape=(config.batch_size,config.max_phr_len,60),name='harm_placeholder')
+        self.ap_placeholder = tf.placeholder(tf.float32, shape=(config.batch_size,config.max_phr_len,4),name='ap_placeholder')
+        if config.f0_mode == "cont":
+            self.f0_placeholder = tf.placeholder(tf.float32, shape=(config.batch_size,config.max_phr_len,1),name='f0_placeholder')
+        elif config.f0_mode == "discrete":
+            self.f0_placeholder = tf.placeholder(tf.float32, shape=(config.batch_size,config.max_phr_len,config.cqt_bins),name='f0_placeholder')
+        self.vuv_placeholder = tf.placeholder(tf.float32, shape=(config.batch_size,config.max_phr_len,1),name='vuv_placeholder')
+        self.is_train = tf.placeholder(tf.bool, name="is_train")
+
+    def train(self):
+        """
+        Function to train the model, and save Tensorboard summary, for N epochs. 
+        """
+        sess = tf.Session()
+
+        self.loss_function()
+        self.get_optimizers()
+        self.load_model(sess, config.log_dir)
+        self.get_summary(sess, config.log_dir)
+        start_epoch = int(sess.run(tf.train.get_global_step()) / (config.batches_per_epoch_train))
+
+
+        print("Start from: %d" % start_epoch)
+
+
+        for epoch in range(start_epoch, config.num_epochs):
+            data_generator = data_gen()
+            val_generator = data_gen(mode = 'Val')
+            start_time = time.time()
+
+
+            batch_num = 0
+            epoch_final_loss = 0
+            epoch_harm_loss = 0
+            epoch_ap_loss = 0
+            epoch_vuv_loss = 0
+            epoch_f0_loss = 0
+
+            val_final_loss = 0
+            val_harm_loss = 0
+            val_ap_loss = 0
+            val_vuv_loss = 0
+            val_f0_loss = 0
+
+            with tf.variable_scope('Training'):
+
+                for voc, feat, atb in data_generator:
+
+                    harm_loss, ap_loss, f0_loss, vuv_loss, summary_str = self.train_model(voc, feat, atb, sess)
+
+                    epoch_harm_loss+=harm_loss
+                    epoch_ap_loss+=ap_loss
+                    epoch_f0_loss+=f0_loss
+                    epoch_vuv_loss+=vuv_loss
+
+                    self.train_summary_writer.add_summary(summary_str, epoch)
+                    self.train_summary_writer.flush()
+
+                    utils.progress(batch_num,config.batches_per_epoch_train, suffix = 'training done')
+
+                    batch_num+=1
+
+                epoch_harm_loss = epoch_harm_loss/batch_num
+                epoch_ap_loss = epoch_ap_loss/batch_num
+                epoch_f0_loss = epoch_f0_loss/batch_num
+                epoch_vuv_loss = epoch_vuv_loss/batch_num
+
+                print_dict = {"Harm Loss": epoch_harm_loss}
+                print_dict["Ap Loss"] =  epoch_ap_loss
+                print_dict["F0 Loss"] =  epoch_f0_loss
+                print_dict["Vuv Loss"] =  epoch_vuv_loss
+
+            if (epoch + 1) % config.validate_every == 0:
+                batch_num = 0
+                with tf.variable_scope('Validation'):
+                    for voc, feat, atb in val_generator:
+
+                        harm_loss, ap_loss, f0_loss, vuv_loss, summary_str = self.validate_model(voc, feat, atb, sess)
+                        val_harm_loss+=harm_loss
+                        val_ap_loss+=ap_loss
+                        val_f0_loss+=f0_loss
+                        val_vuv_loss+=vuv_loss
+
+                        self.val_summary_writer.add_summary(summary_str, epoch)
+                        self.val_summary_writer.flush()
+                        batch_num+=1
+
+                        utils.progress(batch_num, config.batches_per_epoch_val, suffix='validation done')
+
+                    val_harm_loss = val_harm_loss/batch_num
+                    val_ap_loss = val_ap_loss/batch_num
+                    val_f0_loss = val_f0_loss/batch_num
+                    val_vuv_loss = val_vuv_loss/batch_num
+
+                    print_dict["Val Harm Loss"] =  val_harm_loss
+                    print_dict["Val Ap Loss"] =  val_ap_loss
+                    print_dict["Val F0 Loss"] =  val_f0_loss
+                    print_dict["Val Vuv Loss"] =  val_vuv_loss
+
+            end_time = time.time()
+            if (epoch + 1) % config.print_every == 0:
+                self.print_summary(print_dict, epoch, end_time-start_time)
+            if (epoch + 1) % config.save_every == 0 or (epoch + 1) == config.num_epochs:
+                self.save_model(sess, epoch+1, config.log_dir)
+
+    def train_model(self, voc, feat, atb, sess):
+        """
+        Function to train the model for each epoch
+        """
+
+        if config.f0_mode == "cont":
+            feed_dict = {self.input_placeholder: voc, self.harm_placeholder: feat[:,:,:60], self.ap_placeholder: feat[:,:,60:64], \
+            self.f0_placeholder: feat[:,:,-2:-1], self.vuv_placeholder: feat[:,:,-1:], self.is_train: True}
+        elif config.f0_mode == "discrete":
+            feed_dict = {self.input_placeholder: voc, self.harm_placeholder: feat[:,:,:60], self.ap_placeholder: feat[:,:,60:64], \
+            self.f0_placeholder: atb, self.vuv_placeholder: feat[:,:,-1:], self.is_train: True}
+
+        _,_,_, harm_loss, ap_loss, f0_loss, vuv_loss = sess.run([self.harm_train_function,self.f0_train_function, self.vuv_train_function,
+            self.harm_loss, self.ap_loss, self.f0_loss, self.vuv_loss ], feed_dict=feed_dict)
+
+
+
+        summary_str = sess.run(self.summary, feed_dict=feed_dict)
+
+        return harm_loss, ap_loss, f0_loss, vuv_loss, summary_str
+
+    def validate_model(self, voc, feat, atb, sess):
+        """
+        Function to train the model for each epoch
+        """
+        if config.f0_mode == "cont":
+            feed_dict = {self.input_placeholder: voc, self.harm_placeholder: feat[:,:,:60], self.ap_placeholder: feat[:,:,60:64], \
+            self.f0_placeholder: feat[:,:,-2:-1], self.vuv_placeholder: feat[:,:,-1:], self.is_train: False}
+        elif config.f0_mode == "discrete":
+            feed_dict = {self.input_placeholder: voc, self.harm_placeholder: feat[:,:,:60], self.ap_placeholder: feat[:,:,60:64], \
+            self.f0_placeholder: atb, self.vuv_placeholder: feat[:,:,-1:], self.is_train: False}
+        harm_loss, ap_loss, f0_loss, vuv_loss = sess.run([self.harm_loss, self.ap_loss, self.f0_loss, self.vuv_loss ], feed_dict=feed_dict)
+
+
+        summary_str = sess.run(self.summary, feed_dict=feed_dict)
+
+        return harm_loss, ap_loss, f0_loss, vuv_loss, summary_str
+
+
+
+    def read_hdf5_file(self, file_name):
+        """
+        Function to read and process input file, given name and the synth_mode.
+        Returns features for the file based on mode (0 for hdf5 file, 1 for wav file).
+        Currently, only the HDF5 version is implemented.
+        """
+
+        if config.use_casas:
+
+            stat_file = h5py.File('./stats.hdf5', mode='r')
+        else:
+            stat_file = h5py.File('./stats_yam.hdf5', mode='r')
+        max_feat = np.array(stat_file["feats_maximus"])
+        min_feat = np.array(stat_file["feats_minimus"])
+
+        stat_file.close()
+
+        with h5py.File(config.voice_dir + file_name) as voc_file:
+
+            voc_stft = voc_file["voc_stft"][()]
+
+            back_stft = voc_file["back_stft"][()]
+
+            mix_stft = (voc_stft + back_stft)/2
+
+            feats = np.array(voc_file['world_feats'])
+
+            atb = voc_file["atb"][()]
+
+            atb = atb[:, 1:]
+
+
+        return mix_stft, feats, atb
+
+    def test_file_hdf5(self, file_name):
+        """
+        Function to extract vocals from hdf5 file.
+        """
+        if config.use_casas:
+
+            stat_file = h5py.File('./stats.hdf5', mode='r')
+        else:
+            stat_file = h5py.File('./stats_yam.hdf5', mode='r')
+
+        max_feat = np.array(stat_file["feats_maximus"])
+        min_feat = np.array(stat_file["feats_minimus"])
+        stat_file.close()
+        sess = tf.Session()
+        self.load_model(sess, log_dir = config.log_dir)
+        mix_stft, feats, atb = self.read_hdf5_file(file_name)
+        out_feats, out_atb, out_vuv = self.process_file(mix_stft,  sess)
+
+        if config.f0_mode == "discrete":
+
+            est_freq = utils.to_viterbi_cents(out_atb)
+
+            est_freq = est_freq/100
+            est_freq = est_freq + 12*np.log2(10) - 12*np.log2(440)
+            est_freq = est_freq + 69 
+
+            ori_freq = utils.to_viterbi_cents(atb)
+
+            ori_freq = ori_freq/100
+            ori_freq = ori_freq + 12*np.log2(10) - 12*np.log2(440)
+            ori_freq = ori_freq + 69
+
+            # import pdb;pdb.set_trace()
+
+        elif config.f0_mode == "cont":
+            est_freq = None
+
+        self.plot_features(feats, out_feats, mix_stft, atb, out_atb, est_freq, out_vuv)
+
+        # import pdb;pdb.set_trace()
+
+        synth = utils.query_yes_no("Synthesize output? ")
+
+        if synth:
+
+            if config.f0_mode == "cont":
+
+                audio_out = utils.feats_to_audio(np.concatenate((out_feats[:feats.shape[0],:-1], out_vuv[:feats.shape[0]]) , axis = -1))
+                sf.write('./{}_ss_pred.wav'.format(file_name[:-5]), audio_out, config.fs)
+
+            elif config.f0_mode == "discrete":
+
+                audio_out = utils.feats_to_audio(np.concatenate((out_feats[:feats.shape[0]], np.expand_dims(est_freq[:feats.shape[0]],-1), out_vuv[:feats.shape[0]]) , axis = -1))
+                sf.write('./{}_ss_pred_dis.wav'.format(file_name[:-5]), audio_out, config.fs)
+
+
+            # sf.write('./{}_ss_pred.wav'.format(file_name[:-5]), audio_out, config.fs)
+
+        synth = utils.query_yes_no("Synthesize output with original F0? ")
+
+        if synth:
+
+            audio_out = utils.feats_to_audio(np.concatenate((out_feats[:feats.shape[0],:-2], feats[:out_feats.shape[0],-2:]) , axis = -1))
+
+            sf.write('./{}_ss_ori.wav'.format(file_name[:-5]), audio_out, config.fs)
+
+        synth_ori = utils.query_yes_no("Synthesize ground truth with vocoder? ")
+
+        if synth_ori:
+            audio = utils.feats_to_audio(feats) 
+            sf.write('./{}_ori.wav'.format(file_name[:-5]), audio, config.fs)
+
+    def read_wav_file(self, file_name):
+
+        audio, fs = librosa.core.load(file_name, sr=config.fs)
+
+        audio = np.float64(audio)
+
+        if len(audio.shape) == 2:
+
+            vocals = np.array((audio[:,1]+audio[:,0])/2)
+
+        else: 
+            vocals = np.array(audio)
+
+        voc_stft = np.clip(abs(utils.stft(vocals, hopsize = config.hopsize, nfft = config.nfft, fs = config.fs, window = config.window)), 0.0, 1.0)
+
+        return voc_stft
+
+    def read_acap_file(self, file_name):
+
+        audio, fs = librosa.core.load(file_name, sr=config.fs)
+
+        audio = np.float64(audio)
+
+        if len(audio.shape) == 2:
+
+            vocals = np.array((audio[:,1]+audio[:,0])/2)
+
+        else: 
+            vocals = np.array(audio)
+
+        feats, f0 = utils.stft_to_feats(vocals)
+
+        return feats
+
+    def test_file_wav(self, file_name, acap_file=None):
+        """
+        Function to extract multi pitch from file. Currently supports only HDF5 files.
+        """
+        sess = tf.Session()
+        self.load_model(sess, log_dir =  config.log_dir)
+        mel = self.read_wav_file(file_name)
+
+        if acap_file:
+            feats = self.read_acap_file(acap_file)
+        else:
+            feats = None
+
+
+        out_mel, out_atb, out_vuv = self.process_file(mel, sess)
+        if config.f0_mode == "discrete":
+
+            est_freq = utils.to_viterbi_cents(out_atb)
+
+            est_freq = est_freq/100
+            est_freq = est_freq + 12*np.log2(10) - 12*np.log2(440)
+            est_freq = est_freq + 69 
+
+        plt.figure(1)
+
+        if acap_file:
+
+            ax1 = plt.subplot(311)
+
+            plt.imshow(np.log(mel.T),aspect='auto',origin='lower')
+
+            ax1.set_title("Input STFT", fontsize=10)
+
+            ax2 = plt.subplot(312, sharex = ax1)
+
+            plt.imshow(feats[:,:64].T,aspect='auto',origin='lower')
+
+            ax2.set_title("Ground Truth Vocoder Features", fontsize=10)
+
+            ax3 = plt.subplot(313, sharex = ax1, sharey = ax2)
+
+            plt.imshow(out_mel[:feats.shape[0]].T,aspect='auto',origin='lower')
+
+            ax3.set_title("Output Vocoder Features", fontsize=10)
+
+
+            plt.figure(4)
+
+
+            ax1 = plt.subplot(211)
+
+            plt.plot(feats[:,-1])
+
+            ax1.set_title("Ground Truth VUV", fontsize=10)
+
+            ax2 = plt.subplot(212, sharex = ax1, sharey = ax1)
+
+            plt.plot(out_vuv)
+
+            ax1.set_title("Output VUV", fontsize=10)
+
+
+            plt.figure(3)
+
+
+
+            if config.f0_mode == "cont":
+                f0_output = out_mel[:feats.shape[0],-1]
+            else:
+                f0_output = est_freq
+
+            f0_output = f0_output*(1-out_vuv[:feats.shape[0],0])
+            f0_output[f0_output == 0] = np.nan
+
+
+            plt.plot(f0_output, label = "Predicted Value")
+            f0_gt = feats[:,-2]
+            f0_gt = f0_gt*(1-feats[:,-1])
+            f0_gt[f0_gt == 0] = np.nan
+            plt.plot(f0_gt, label="Ground Truth")
+            f0_difference = np.nan_to_num(abs(f0_gt-f0_output))
+            f0_greater = np.where(f0_difference>config.f0_threshold)
+            diff_per = f0_greater[0].shape[0]/len(f0_output)
+            plt.suptitle("Percentage correct = "+'{:.3%}'.format(1-diff_per))
+            plt.legend()
+
+            plt.show()
+
+        else:
+
+
+            ax1 = plt.subplot(211)
+
+            plt.imshow(np.log(mel.T),aspect='auto',origin='lower')
+
+            ax1.set_title("Input STFT", fontsize=10)
+
+            ax1 = plt.subplot(212)
+
+            plt.imshow(out_mel.T,aspect='auto',origin='lower')
+
+            ax1.set_title("Output Vocoder Features", fontsize=10)
+
+            plt.show()
+
+
+
+        if config.f0_mode == "cont":
+
+            audio_out = utils.feats_to_audio(np.concatenate((out_mel, out_vuv) , axis = -1))
+            sf.write('./{}_ss_pred.wav'.format(file_name.split('/')[-1][:-4]), audio_out, config.fs)
+
+        elif config.f0_mode == "discrete":
+
+            audio_out = utils.feats_to_audio(np.concatenate((out_mel, np.expand_dims(est_freq,-1), out_vuv) , axis = -1))
+            sf.write('./{}_ss_pred_dis.wav'.format(file_name.split('/')[-1][:-4]), audio_out, config.fs)
+
+        if acap_file:
+
+            audio = utils.feats_to_audio(feats) 
+            sf.write('./{}_ori.wav'.format(file_name.split('/')[-1][:-4]), audio, config.fs)
+
+        np.save(file_name.split('/')[-1][:-4], out_mel)
+
+
+
+    def plot_features(self, feats, out_feats, mix_stft, atb, out_atb, est_frequ, out_vuv):
+        """
+        Function to plot output and ground truth features
+        """
+        plt.figure(1)
+
+
+        ax1 = plt.subplot(311)
+
+        plt.imshow(np.log(mix_stft.T),aspect='auto',origin='lower')
+
+        ax1.set_title("Input STFT", fontsize=10)
+
+        ax2 = plt.subplot(312, sharex = ax1, sharey = ax1)
+
+        plt.imshow(feats[:,:60].T,aspect='auto',origin='lower')
+
+        ax1.set_title("Ground Truth Vocoder Features", fontsize=10)
+
+        ax3 = plt.subplot(313, sharex = ax1, sharey = ax1)
+
+        ax3.set_title("Output Vocoder Features", fontsize=10)
+
+        plt.imshow(out_feats[:,:60].T,aspect='auto',origin='lower')
+
+        plt.figure(4)
+
+
+        ax1 = plt.subplot(211)
+
+        plt.plot(feats[:,-1])
+
+        ax1.set_title("Ground Truth VUV", fontsize=10)
+
+        ax2 = plt.subplot(212, sharex = ax1, sharey = ax1)
+
+        plt.plot(out_vuv)
+
+        ax1.set_title("Output VUV", fontsize=10)
+
+        if config.f0_mode == "cont":
+
+            plt.figure(2)
+            f0_output = out_feats[:feats.shape[0],-2]
+            f0_output = f0_output*(1-feats[:,-1])
+            f0_output[f0_output == 0] = np.nan
+            plt.plot(f0_output, label = "Predicted Value")
+            f0_gt = feats[:,-2]
+            f0_gt = f0_gt*(1-feats[:,-1])
+            f0_gt[f0_gt == 0] = np.nan
+            plt.plot(f0_gt, label="Ground Truth")
+            f0_difference = np.nan_to_num(abs(f0_gt-f0_output))
+            f0_greater = np.where(f0_difference>config.f0_threshold)
+            diff_per = f0_greater[0].shape[0]/len(f0_output)
+            plt.suptitle("Percentage correct = "+'{:.3%}'.format(1-diff_per))
+
+        elif config.f0_mode == "discrete":
+            out_atb = out_atb[:atb.shape[0]]
+            time_1, ori_freq = utils.process_output(atb)
+            time_2, est_freq = utils.process_output(out_atb)
+            # import pdb;pdb.set_trace()
+            scores = mir_eval.multipitch.evaluate(time_1, ori_freq, time_2, est_freq)
+            pre = scores['Precision']
+            acc = scores['Accuracy']
+            rec = scores['Recall']
+            plt.figure(2)
+            ax1 = plt.subplot(211)
+            plt.imshow(atb.T, origin='lower', aspect='auto')
+            ax2 = plt.subplot(212, sharex = ax1, sharey = ax1)
+            plt.imshow(out_atb.T, origin='lower', aspect='auto')
+            plt.suptitle("Precision: {:.3%}, Accuracy: {:.3%},  Recall: {:.3%}".format(pre, acc, rec))
+
+            plt.figure(3)
+            f0_output = est_frequ[:feats.shape[0]]
+            f0_output = f0_output*(1-feats[:,-1])
+            f0_output[f0_output == 0] = np.nan
+
+
+            plt.plot(f0_output, label = "Predicted Value")
+            f0_gt = feats[:,-2]
+            f0_gt = f0_gt*(1-feats[:,-1])
+            f0_gt[f0_gt == 0] = np.nan
+            plt.plot(f0_gt, label="Ground Truth")
+            f0_difference = np.nan_to_num(abs(f0_gt-f0_output))
+            f0_greater = np.where(f0_difference>config.f0_threshold)
+            diff_per = f0_greater[0].shape[0]/len(f0_output)
+            plt.suptitle("Percentage correct = "+'{:.3%}'.format(1-diff_per))
+
+
+
+        plt.show()
+
+
+    def process_file(self, mix_stft, sess):
+
+        if config.use_casas:
+
+            stat_file = h5py.File('./stats.hdf5', mode='r')
+        else:
+            stat_file = h5py.File('./stats_yam.hdf5', mode='r')
+
+        max_feat = np.array(stat_file["feats_maximus"])
+        min_feat = np.array(stat_file["feats_minimus"])
+        stat_file.close()
+
+        in_batches_stft, nchunks_in = utils.generate_overlapadd(mix_stft)
+
+        out_batches_feats = []
+        out_vuv = []
+        if config.f0_mode == "discrete":
+            out_atb = []
+
+        for in_batch_stft in in_batches_stft :
+            feed_dict = {self.input_placeholder: in_batch_stft, self.is_train: False}
+            harm, ap, f0, vuv = sess.run([self.harm, self.ap, self.f0, self.vuv], feed_dict=feed_dict)
+            out_vuv.append(vuv)
+            if config.f0_mode == "cont":
+                val_feats = np.concatenate((harm, ap, f0), axis=-1)
+                out_batches_feats.append(val_feats)
+            elif config.f0_mode == "discrete":
+                val_feats = np.concatenate((harm, ap), axis=-1)
+                out_batches_feats.append(val_feats)
+                out_atb.append(f0)
+
+        out_batches_feats = np.array(out_batches_feats)
+
+        out_feats = utils.overlapadd(out_batches_feats,nchunks_in)
+
+        out_vuv = utils.overlapadd(np.array(out_vuv),nchunks_in)
+
+        if config.f0_mode == "discrete":
+
+            out_atb = utils.overlapadd(np.array(out_atb), nchunks_in)
+
+        if config.f0_mode == "cont":
+
+            out_feats = out_feats*(max_feat[:-1]-min_feat[:-1])+min_feat[:-1]
+            out_atb = None
+
+        elif config.f0_mode == "discrete":
+            out_feats = out_feats*(max_feat[:-2]-min_feat[:-2])+min_feat[:-2]
+
+        out_vuv = np.round(out_vuv)
+
+
+        return out_feats, out_atb, out_vuv
+
+    def read_med_file(self, file_name):
+
+        audio, fs = librosa.core.load(file_name, sr=config.fs, mono=False)
+
+        audio = np.float64(audio)
+
+        vocals = np.array(audio[1,:])
+
+        mixture = np.array(audio[0,:])
+
+        voc_stft = np.clip(abs(utils.stft(mixture, hopsize = config.hopsize, nfft = config.nfft, fs = config.fs, window = config.window)), 0.0, 1.0)
+
+        feats, f0 = utils.stft_to_feats(vocals)
+
+        return voc_stft, feats, mixture
+
+    def test_folder_wav(self, folder_name):
+        """
+        Function to extract multi pitch from file. Currently supports only HDF5 files.
+        """
+        sess = tf.Session()
+        self.load_model(sess, log_dir=config.log_dir)
+
+        file_list = [x for x in os.listdir(folder_name) if x in config.med_to_use]
+
+        count = 0
+
+        unprocessable = []
+
+        for file_name in file_list:
+            # try:
+            mel, feats, mixture = self.read_med_file(os.path.join(folder_name, file_name))
+            out_mel, out_f0, out_vuv = self.process_file(mel, sess)
+            out_featss = np.concatenate((out_mel, out_vuv), axis = -1)
+
+            audio_out = utils.feats_to_audio(out_featss) 
+
+            audio_ori = utils.feats_to_audio(feats) 
+
+            sf.write(os.path.join(config.output_dir,'./{}_output_1.wav'.format(file_name.split('/')[-1][:-4])), audio_out, config.fs)
+
+            # except:
+            #     unprocessable.append(file_name)
+
+            count+=1
+
+            utils.progress(count, len(file_list), "Files processed")
+
+        print(unprocessable)
+
+    def model(self):
+        """
+        The main model function, takes and returns tensors.
+        Defined in modules.
+
+        """
+        with tf.variable_scope('Harm_Model') as scope:
+            if config.enc_mode == "wave":
+                self.harm, self.ap = modules.nr_wavenet(self.input_placeholder, self.is_train)
+            elif config.enc_mode == "conv":
+                self.harm, self.ap = modules.enc_dec(self.input_placeholder, self.is_train)
+        with tf.variable_scope('F0_Model') as scope:
+            if config.enc_mode == "wave":
+                self.f0 = modules.nr_wavenet_f0(self.input_placeholder, self.harm, self.ap, self.is_train)
+            elif config.enc_mode == "conv":
+                self.f0 = modules.enc_dec_f0(self.input_placeholder, self.harm, self.ap, self.is_train)
+        with tf.variable_scope('Vuv_Model') as scope:
+            if config.enc_mode == "wave":
+                self.vuv = modules.nr_wavenet_vuv(self.input_placeholder, self.harm, self.ap, self.f0, self.is_train)
+            elif config.enc_mode == "conv":
+                self.vuv = modules.enc_dec_vuv(self.input_placeholder, self.harm, self.ap, self.f0, self.is_train)
 
 def test():
     # model = DeepSal()
