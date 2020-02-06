@@ -2,9 +2,11 @@ import numpy as np
 import os
 import time
 import h5py
-
+import random
 import matplotlib.pyplot as plt
 import collections
+from itertools import chain
+
 import config
 import utils
 
@@ -465,6 +467,76 @@ def get_stats():
 
 
 
+def SATBBatchGenerator(hdf5_filepath, batch_size=config.batch_size, num_frames=(config.max_phr_len -1)* config.hopsize+1024, use_case=0, partition='train', resampling_fs=22050, debug=False):
+
+    dataset = h5py.File(hdf5_filepath, "r")
+    itCounter = 0
+
+    while True:
+
+        itCounter = itCounter + 1
+        #print('Iteration '+str(itCounter))
+        # 1. Choose random song (we get it from a random part: here soprano1)
+        randsong = random.choice(list(dataset[partition]['soprano1'].keys()))
+        sources = ['soprano','alto','tenor','bass']
+
+        startspl = 0
+        endspl   = 0
+
+        out_shape  = np.zeros((batch_size, num_frames,1))
+        out_shapes = {'soprano':np.copy(out_shape),'alto':np.copy(out_shape),'tenor':np.copy(out_shape),'bass':np.copy(out_shape), 'mix':np.copy(out_shape)}
+
+        for i in range(batch_size):
+
+            # Use-Case: At most one singer per part
+            if (use_case==0):
+                max_num_singer_per_part = 1
+                randsources = random.sample(sources, random.randint(1,len(sources)))                   # Randomize source pick if at most one singer per part
+            # Use-Case: Exactly one singer per part
+            elif (use_case==1):
+                max_num_singer_per_part = 1
+                randsources = sources                                                                  # Take all sources + Set num singer = 1
+            # Use-Case: At least one singer per part
+            else:
+                max_num_singer_per_part = 4
+                randsources = sources                                                                  # Take all sources + Set max num of singer = 4  
+
+            # Get Start and End samples
+            startspl = random.randint(0,len(dataset[partition]['soprano1'][randsong]['raw_wav'])-num_frames) # This assume that all stems are the same length
+            endspl   = startspl+num_frames
+
+            # Get Random Sources:                                                            
+            num_sources = [random.randint(1,max_num_singer_per_part) for _ in range(len(randsources))] # Get random number of singer per part
+            part_number = [random.sample(range(1,5), x) for x in num_sources]                          # Get random part number
+            part_number = list(chain.from_iterable(part_number))                                       # Flatten the part number (so its easier to concatenate)
+            randsources = np.repeat(randsources,num_sources)                                           # Repeat the parts according to the number of singer per group
+            randsources = ["{}{}".format(a_, b_) for a_, b_ in zip(randsources, part_number)]          # Concatenate strings for part name
+
+            # Retrieve the chunks and store them in output shapes                                         
+            for source in randsources:
+                source_chunk = dataset[partition][source][randsong]['raw_wav'][startspl:endspl]        # Retrieve part's chunk
+                out_shapes[source[:-1]][i] = np.add(out_shapes[source[:-1]][i],source_chunk[..., np.newaxis])# Store chunk in output shapes
+                out_shapes['mix'][i] = np.add(out_shapes['mix'][i],source_chunk[..., np.newaxis])            # Add the chunk to the mix
+            
+            # Scale down all the group chunks based off number of sources per group
+            if max_num_singer_per_part > 1:
+                out_shapes['soprano'][i] = (out_shapes['soprano'][i]/num_sources[0])
+                out_shapes['alto'][i]    = (out_shapes['tenor'][i]/num_sources[1])
+                out_shapes['tenor'][i]   = (out_shapes['alto'][i]/num_sources[2])
+                out_shapes['bass'][i]    = (out_shapes['bass'][i]/num_sources[3])
+
+            out_shapes['mix'][i] = (out_shapes['mix'][i]/len(randsources)) # Scale down mix
+        
+        if debug==True:
+            if partition.decode("utf-8")=='train':
+                rand_pick = random.randint(0,batch_size-1)
+                debug_dir = './debug/it#'+str(itCounter)+'_batchpick#'+str(rand_pick)
+                if not os.path.isdir(debug_dir):
+                    os.mkdir(debug_dir)
+                for source in sources:
+                    soundfile.write(debug_dir+'/'+source+'.wav', out_shapes[source][rand_pick], resampling_fs, 'PCM_24')
+
+        yield out_shapes
 
 
 

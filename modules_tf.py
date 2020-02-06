@@ -348,7 +348,7 @@ def enc_dec_mask(inputs, is_train):
 
 
     # if config.use_complex:
-    mask = tf.layers.dense(output, config.output_features, name = "Fu_F", activation=tf.nn.sigmoid)
+    mask = tf.layers.dense(output, config.output_features*3, name = "Fu_F", activation=tf.nn.sigmoid)
     # else:
         # mask = tf.layers.dense(output, 513, name = "Fu_F", activation=tf.nn.sigmoid)
     return tf.squeeze(mask)

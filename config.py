@@ -18,7 +18,7 @@ wav_dir_casas_ross = '../datasets/casas_rossinyol/'
 
 fs = 32000
 nfft = 1024
-hopsize = 160
+hopsize = 256
 hoptime = hopsize/fs
 window = np.hanning(nfft)
 
@@ -50,7 +50,7 @@ output_dir_np = './output_med_np/'
 
 med_to_use = ['MusicDelta_Gospel.wav', 'FacesOnFilm_WaitingForGa.wav', 'Lushlife_ToynbeeSuite.wav', 'HezekiahJones_BorrowedHeart.wav', 'BrandonWebster_DontHearAThing.wav', 'AimeeNorwich_Child.wav', 'ClaraBerryAndWooldog_AirTraffic.wav']
 
-mode = "sep"
+mode = "mask"
 enc_mode = "conv"
 f0_mode = 'cont'
 content_enc_mode = 'lstm'
@@ -135,7 +135,7 @@ elif mode == "mask":
 
 	else:
 		if mul_mask:
-			log_dir = './log_mul_mask/'
+			log_dir = './log_unet_choral/'
 		else:
 			log_dir = './log_mask/'
 

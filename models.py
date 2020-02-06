@@ -1,7 +1,7 @@
 import tensorflow as tf
 import modules_tf as modules
 import config
-from data_pipeline import data_gen, data_gen_stft, data_gen_mask, data_gen_chain
+from data_pipeline import data_gen, data_gen_stft, data_gen_mask, data_gen_chain, SATBBatchGenerator
 import time, os
 import utils
 import h5py
@@ -10,13 +10,15 @@ import mir_eval
 import pandas as pd
 from random import randint
 import librosa
-# import sig_process
+import functools
 
 import soundfile as sf
 
 import matplotlib.pyplot as plt
 from scipy.ndimage import filters
+from tensorflow.contrib.signal.python.ops import window_ops
 
+window = functools.partial(window_ops.hann_window, periodic=True)
 
 def binary_cross(p,q):
     return -(p * tf.log(q + 1e-12) + (1 - p) * tf.log( 1 - q + 1e-12))
@@ -568,14 +570,21 @@ class MaskSep(Model):
 
 
         if config.mul_mask:
-            self.voc_loss = tf.reduce_sum(tf.abs(self.mask*self.input_placeholder - self.voc_stft_placeholder))
-            self.back_loss = tf.reduce_sum(tf.abs((1-self.mask)*self.input_placeholder - self.back_stft_placeholder))
+            soprano = tf.abs(tf.contrib.signal.stft(tf.squeeze(self.soprano_stft_placeholder), frame_length=1024, frame_step=config.hopsize, fft_length=1024, window_fn=window))
+            alto = tf.abs(tf.contrib.signal.stft(tf.squeeze(self.alto_stft_placeholder), frame_length=1024, frame_step=config.hopsize, fft_length=1024, window_fn=window))
+            tenor = tf.abs(tf.contrib.signal.stft(tf.squeeze(self.tenor_stft_placeholder), frame_length=1024, frame_step=config.hopsize, fft_length=1024, window_fn=window))
+            bass = tf.abs(tf.contrib.signal.stft(tf.squeeze(self.bass_stft_placeholder), frame_length=1024, frame_step=config.hopsize, fft_length=1024, window_fn=window))
+
+            self.soprano_loss = tf.reduce_sum(tf.abs(self.mask[:,:,:config.output_features]*self.mix - soprano))
+            self.alto_loss = tf.reduce_sum(tf.abs(self.mask[:,:,config.output_features: config.output_features*2]*self.mix - alto))
+            self.tenor_loss = tf.reduce_sum(tf.abs(self.mask[:,:,config.output_features*2:]*self.mix - tenor))
+            self.bass_loss = tf.reduce_sum(tf.abs((1-(self.mask[:,:,:config.output_features] + self.mask[:,:,config.output_features: config.output_features*2] + self.mask[:,:,config.output_features*2:]))*self.mix - bass))
 
         else:
             self.voc_loss = tf.reduce_sum(tf.abs(self.mask - self.voc_stft_placeholder))
             self.back_loss = tf.reduce_sum(tf.abs((self.input_placeholder-self.mask) - self.back_stft_placeholder))
 
-        self.recon_loss = self.voc_loss + self.back_loss 
+        self.recon_loss = self.soprano_loss + self.alto_loss + self.tenor_loss + self.bass_loss 
 
         if config.mask_emb:
 
@@ -632,9 +641,11 @@ class MaskSep(Model):
         Depending on the mode, can return placeholders for either just the generator or both the generator and discriminator.
         """
 
-        self.input_placeholder = tf.placeholder(tf.float32, shape=(config.batch_size,config.max_phr_len,config.stft_features),name='input_placeholder')
-        self.voc_stft_placeholder = tf.placeholder(tf.float32, shape=(config.batch_size,config.max_phr_len,config.stft_features),name='voc_stft_placeholder')
-        self.back_stft_placeholder = tf.placeholder(tf.float32, shape=(config.batch_size,config.max_phr_len,config.stft_features),name='back_stft_placeholder')
+        self.input_placeholder = tf.placeholder(tf.float32, shape=(config.batch_size, (config.max_phr_len -1)* config.hopsize+1024,1),name='input_placeholder')
+        self.soprano_stft_placeholder = tf.placeholder(tf.float32, shape=(config.batch_size,(config.max_phr_len -1)* config.hopsize+1024, 1),name='soprano_stft_placeholder')
+        self.alto_stft_placeholder = tf.placeholder(tf.float32, shape=(config.batch_size,(config.max_phr_len -1)* config.hopsize+1024, 1),name='alto_stft_placeholder')
+        self.tenor_stft_placeholder = tf.placeholder(tf.float32, shape=(config.batch_size,(config.max_phr_len -1)* config.hopsize+1024, 1),name='tenor_stft_placeholder')
+        self.bass_stft_placeholder = tf.placeholder(tf.float32, shape=(config.batch_size,(config.max_phr_len -1)* config.hopsize+1024,1 ),name='bass_stft_placeholder')
         self.is_train = tf.placeholder(tf.bool, name="is_train")
 
         self.feats_placeholder = tf.placeholder(tf.float32, shape=(config.batch_size, config.max_phr_len, config.input_features),
@@ -661,8 +672,8 @@ class MaskSep(Model):
 
 
         for epoch in range(start_epoch, config.num_epochs):
-            data_generator = data_gen_mask()
-            val_generator = data_gen_mask(mode = 'Val')
+            data_generator = SATBBatchGenerator("../Darius/Wave-U-Net/satb_dataset.hdf5")
+            val_generator = SATBBatchGenerator("../Darius/Wave-U-Net/satb_dataset.hdf5",partition='valid')
             start_time = time.time()
 
 
@@ -679,13 +690,13 @@ class MaskSep(Model):
 
             with tf.variable_scope('Training'):
 
-                for mix, voc, back, feats, speakers in data_generator:
+                for _ in range(config.batches_per_epoch_train):
+                    batch = next(data_generator)
 
-                    loss, voc_loss, back_loss, summary_str = self.train_model(mix, voc, back, feats, speakers, sess)
+                    loss, summary_str = self.train_model(batch, sess)
 
                     epoch_final_loss+=loss
-                    epoch_voc_loss+=voc_loss
-                    epoch_back_loss+=back_loss
+
 
                     self.train_summary_writer.add_summary(summary_str, epoch)
                     self.train_summary_writer.flush()
@@ -705,12 +716,12 @@ class MaskSep(Model):
             if (epoch + 1) % config.validate_every == 0:
                 batch_num = 0
                 with tf.variable_scope('Validation'):
-                    for mix, voc, back, feats, speakers in val_generator:
+                    for _ in range(config.batches_per_epoch_val):
+                        batch = next(val_generator)
 
-                        loss, voc_loss, back_loss, summary_str = self.validate_model(mix, voc, back, feats, speakers, sess)
+                        loss, summary_str = self.validate_model(batch, sess)
                         val_final_loss+=loss
-                        val_voc_loss+=voc_loss
-                        val_back_loss+=back_loss
+
 
                         self.val_summary_writer.add_summary(summary_str, epoch)
                         self.val_summary_writer.flush()
@@ -733,7 +744,7 @@ class MaskSep(Model):
             if (epoch + 1) % config.save_every == 0 or (epoch + 1) == config.num_epochs:
                 self.save_model(sess, epoch+1, config.log_dir)
 
-    def train_model(self, mix, voc, back, feats, speakers, sess):
+    def train_model(self,batch, sess):
         """
         Function to train the model for each epoch
         """
@@ -745,17 +756,21 @@ class MaskSep(Model):
             else:
                 feed_dict = {self.input_placeholder: mix, self.voc_stft_placeholder: voc, self.back_stft_placeholder: back, self.feats_placeholder:feats[:,:,:64], self.speaker_labels:speakers, self.is_train: True}
         else:
-            feed_dict = {self.input_placeholder: mix, self.voc_stft_placeholder: voc, self.back_stft_placeholder: back, self.is_train: True}
 
 
-        _, final_loss, voc_loss, back_loss = sess.run([self.mask_train_function, self.final_loss, self.voc_loss, self.back_loss], feed_dict=feed_dict)
+            
+            feed_dict = {self.input_placeholder: batch['mix'], self.soprano_stft_placeholder: batch['soprano'], self.alto_stft_placeholder: batch['alto'],\
+            self.tenor_stft_placeholder: batch['tenor'], self.bass_stft_placeholder: batch['bass'], self.is_train: True}
+
+
+        _, final_loss= sess.run([self.mask_train_function, self.final_loss], feed_dict=feed_dict)
 
 
         summary_str = sess.run(self.summary, feed_dict=feed_dict)
 
-        return final_loss, voc_loss, back_loss, summary_str
+        return final_loss, summary_str
 
-    def validate_model(self, mix, voc, back, feats, speakers, sess):
+    def validate_model(self, batch, sess):
         """
         Function to train the model for each epoch
         """
@@ -765,16 +780,17 @@ class MaskSep(Model):
 
             else:
                 feed_dict = {self.input_placeholder: mix, self.voc_stft_placeholder: voc, self.back_stft_placeholder: back, self.feats_placeholder:feats[:,:,:64], self.speaker_labels:speakers, self.is_train: False}
-        else:
-            feed_dict = {self.input_placeholder: mix, self.voc_stft_placeholder: voc, self.back_stft_placeholder: back, self.is_train: False}
+        else:            
+            feed_dict = {self.input_placeholder: batch['mix'], self.soprano_stft_placeholder: batch['soprano'], self.alto_stft_placeholder: batch['alto'],\
+            self.tenor_stft_placeholder: batch['tenor'], self.bass_stft_placeholder: batch['bass'], self.is_train: False}
 
 
-        final_loss, voc_loss, back_loss = sess.run([self.final_loss, self.voc_loss, self.back_loss], feed_dict=feed_dict)
+        final_loss = sess.run(self.final_loss, feed_dict=feed_dict)
 
 
         summary_str = sess.run(self.summary, feed_dict=feed_dict)
 
-        return final_loss, voc_loss, back_loss, summary_str
+        return final_loss, summary_str
 
 
     def read_wav_file(self, file_name):
@@ -790,10 +806,10 @@ class MaskSep(Model):
         else: 
             vocals = np.array(audio)
 
-        mix_stft = utils.stft(vocals, hopsize = config.hopsize, nfft = config.nfft, fs = config.fs, window = config.window)
+        # 
 
 
-        return mix_stft
+        return vocals
 
 
     def test_file_wav(self, file_name, acap_file=None):
@@ -802,7 +818,9 @@ class MaskSep(Model):
         """
         sess = tf.Session()
         self.load_model(sess, log_dir =  config.log_dir)
-        mix_stft = self.read_wav_file(file_name)
+        audio = self.read_wav_file(file_name)
+
+        mix_stft = utils.stft(audio, hopsize = config.hopsize, nfft = config.nfft, fs = config.fs, window = config.window)
 
         abs_mix_stft = abs(mix_stft)
 
@@ -815,14 +833,16 @@ class MaskSep(Model):
             audio_in = utils.istft(abs_voc_stft, pha_mix_stft, hopsize = config.hopsize, nfft = config.nfft, fs = config.fs, window = config.window)
             audio_back = utils.istft(abs_mix_stft - abs_voc_stft, pha_mix_stft, hopsize = config.hopsize, nfft = config.nfft, fs = config.fs, window = config.window)
 
-        out_voc, out_back = self.process_file(abs_mix_stft, sess)
+        out_soprano, out_alto, out_tenor, out_bass = self.process_file(audio, sess)
+
+        import pdb;pdb.set_trace()
 
         if config.use_griff:
             audio_out = utils.griffinlim(out_voc)
             if acap_file:
                 audio_in = utils.griffinlim(abs_voc_stft)
         else:
-            audio_out = utils.istft(out_voc, pha_mix_stft, hopsize = config.hopsize, nfft = config.nfft, fs = config.fs, window = config.window)
+            audio_out = utils.istft(out_soprano[:pha_mix_stft.shape[0]], pha_mix_stft[:out_soprano.shape[0]], hopsize = config.hopsize, nfft = config.nfft, fs = config.fs, window = config.window)
 
         audio_mix_out = utils.istft(abs_mix_stft, pha_mix_stft, hopsize = config.hopsize, nfft = config.nfft, fs = config.fs, window = config.window)
 
@@ -893,7 +913,7 @@ class MaskSep(Model):
             sf.write('./{}_back.wav'.format(file_name.split('/')[-1][:-4]), audio_back, config.fs)
 
 
-    def process_file(self, mix_stft, sess):
+    def process_file(self, audio, sess):
 
         if config.use_casas:
 
@@ -905,36 +925,33 @@ class MaskSep(Model):
         min_feat = np.array(stat_file["feats_minimus"])
         stat_file.close()
 
-        in_batches_stft, nchunks_in = utils.generate_overlapadd(mix_stft)
+        in_batches_stft, nchunks_in = utils.generate_overlapadd(np.expand_dims(audio, -1), time_context=(config.max_phr_len -1)* config.hopsize+1024, overlap=((config.max_phr_len -1)* config.hopsize+1024)/2)
 
-        out_batches_mask = []
+        out_batches_soprano = []
+        out_batches_alto = []
+        out_batches_tenor = []
+        out_batches_bass = []
 
         for in_batch_stft in in_batches_stft :
             feed_dict = {self.input_placeholder: in_batch_stft, self.is_train: False}
-            out_mask = sess.run(self.mask, feed_dict=feed_dict)
-            out_batches_mask.append(out_mask)
-            # if config.f0_mode == "cont":
-            #     val_feats = np.concatenate((harm, ap, f0), axis=-1)
-            #     out_batches_feats.append(val_feats)
-            # elif config.f0_mode == "discrete":
-            #     val_feats = np.concatenate((harm, ap), axis=-1)
-            #     out_batches_feats.append(val_feats)
-            #     out_atb.append(f0)
+            out_soprano, out_alto, out_tenor, out_bass = sess.run([self.mask[:,:,:config.output_features]*self.mix,self.mask[:,:,config.output_features: config.output_features*2]*self.mix,\
+              self.mask[:,:,config.output_features*2:]*self.mix,(1-(self.mask[:,:,:config.output_features] + self.mask[:,:,config.output_features: config.output_features*2] + self.mask[:,:,config.output_features*2:]))*self.mix], feed_dict=feed_dict)
+            out_batches_soprano.append(out_soprano)
+            out_batches_alto.append(out_alto)
+            out_batches_tenor.append(out_tenor)
+            out_batches_bass.append(out_bass)
 
-        out_batches_mask = np.array(out_batches_mask)
+        out_batches_soprano = np.array(out_batches_soprano)
+        out_batches_alto = np.array(out_batches_alto)
+        out_batches_tenor = np.array(out_batches_tenor)
+        out_batches_bass = np.array(out_batches_bass)
 
-        out_mask = utils.overlapadd(out_batches_mask,nchunks_in)
+        out_soprano = utils.overlapadd(out_batches_soprano,nchunks_in)
+        out_alto = utils.overlapadd(out_batches_alto,nchunks_in)
+        out_tenor = utils.overlapadd(out_batches_tenor,nchunks_in)
+        out_bass = utils.overlapadd(out_batches_bass,nchunks_in)
 
-        if config.mul_mask:
-
-            out_voc = mix_stft*out_mask[:mix_stft.shape[0]]
-
-            out_back = mix_stft*(1-out_mask[:mix_stft.shape[0]])
-        else:
-            out_voc = out_mask[:mix_stft.shape[0]]
-            out_back = mix_stft - out_mask[:mix_stft.shape[0]]
-
-        return out_voc, out_back
+        return out_soprano, out_alto, out_tenor, out_bass
 
     def read_med_file(self, file_name):
 
@@ -1017,7 +1034,8 @@ class MaskSep(Model):
 
         else:
             with tf.variable_scope('Mask_Model') as scope:
-                self.mask = modules.enc_dec_mask(self.input_placeholder, self.is_train)
+                self.mix = tf.abs(tf.contrib.signal.stft(tf.squeeze(self.input_placeholder), frame_length=1024, frame_step=config.hopsize, fft_length=1024, window_fn=window))
+                self.mask = modules.enc_dec_mask(self.mix, self.is_train)
 
 
 class Chain(Model):
