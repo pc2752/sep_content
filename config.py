@@ -44,7 +44,7 @@ ref_level_db = 20
 
 voice_dir = '../consolidated_research/voice_32/'
 backing_dir = './backing/'
-output_dir = './output_med_last/'
+output_dir = './output_yam/'
 output_dir_np = './output_med_np/'
 
 
@@ -56,7 +56,7 @@ f0_mode = 'cont'
 content_enc_mode = 'lstm'
 content_dec_mode = 'lstm'
 
-use_content = False
+use_content = True
 use_singer = False
 use_complex = False
 mul_mask = True
@@ -105,7 +105,7 @@ if mode == "sep":
 			if f0_mode == "discrete":
 				log_dir = './log_f0_dis_conv/'
 			elif f0_mode == "cont":
-				log_dir = './log_f0_cont_conv/'
+				log_dir = './log_f0_cont_conv_modspec/'
 elif mode == "mask":
 	if mask_emb:
 		if content_enc_mode == "lstm":

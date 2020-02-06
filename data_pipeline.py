@@ -310,11 +310,16 @@ def data_gen_stft(mode = 'Train', sec_mode = 0):
 
     voc_list = [x for x in os.listdir(config.voice_dir) if x.endswith('.hdf5') and x.startswith('yam')]
 
+    val_list = [x for x in voc_list if "Hiyama" in x]
+
+    train_list = [x for x in voc_list if x not in val_list]
 
 
 
-    train_list = voc_list[:int(len(voc_list)*0.9)]
-    val_list = voc_list[int(len(voc_list)*0.9):]
+    # train_list = voc_list[:int(len(voc_list)*0.9)]
+    # val_list = voc_list[int(len(voc_list)*0.9):]
+
+    # import pdb;pdb.set_trace()
 
 
 

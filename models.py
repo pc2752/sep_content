@@ -17,6 +17,78 @@ import soundfile as sf
 import matplotlib.pyplot as plt
 from scipy.ndimage import filters
 
+def smooth(x,window_len=70,window='hanning'):
+    """smooth the data using a window with requested size.
+    
+    This method is based on the convolution of a scaled window with the signal.
+    The signal is prepared by introducing reflected copies of the signal 
+    (with the window size) in both ends so that transient parts are minimized
+    in the begining and end part of the output signal.
+    
+    input:
+        x: the input signal 
+        window_len: the dimension of the smoothing window; should be an odd integer
+        window: the type of window from 'flat', 'hanning', 'hamming', 'bartlett', 'blackman'
+            flat window will produce a moving average smoothing.
+
+    output:
+        the smoothed signal
+        
+    example:
+
+    t=linspace(-2,2,0.1)
+    x=sin(t)+randn(len(t))*0.1
+    y=smooth(x)
+    
+    see also: 
+    
+    numpy.hanning, numpy.hamming, numpy.bartlett, numpy.blackman, numpy.convolve
+    scipy.signal.lfilter
+ 
+    TODO: the window parameter could be the window itself if an array instead of a string
+    NOTE: length(output) != length(input), to correct this: return y[(window_len/2-1):-(window_len/2)] instead of just y.
+    """
+
+    # if x.ndim != 1:
+    #     raise ValueError, "smooth only accepts 1 dimension arrays."
+
+    # if x.size < window_len:
+    #     raise ValueError, "Input vector needs to be bigger than window size."
+
+
+    if window_len<3:
+        return x
+
+
+    # if not window in ['flat', 'hanning', 'hamming', 'bartlett', 'blackman']:
+    #     raise ValueError, "Window is on of 'flat', 'hanning', 'hamming', 'bartlett', 'blackman'"
+
+
+    s=np.r_[x[window_len-1:0:-1],x,x[-2:-window_len-1:-1]]
+    #print(len(s))
+    if window == 'flat': #moving average
+        w=np.ones(window_len,'d')
+    else:
+        w=eval('np.'+window+'(window_len)')
+
+    y=np.convolve(w/w.sum(),s,mode='valid')
+    return y
+
+def note2traj(note_info, timebase):
+    traj = np.hstack((timebase.reshape(-1, 1), np.zeros(len(timebase)).reshape(-1, 1)))
+    for i in range(note_info.shape[0]):
+        # get indices of trajectory
+        t_start_idx = np.argmin(np.abs(timebase - note_info[i, 0]))
+        t_end_idx = np.argmin(np.abs(timebase - note_info[i, 1]))
+        note_len_idx = t_end_idx - t_start_idx
+        traj[t_start_idx:t_end_idx, 1] = note_info[i, 2]
+    return traj[:,1]
+
+def mod_spec_loss(a, b):
+    a_stft = tf.abs(tf.contrib.signal.stft(tf.squeeze(a), 512, 128))
+    b_stft = tf.abs(tf.contrib.signal.stft(tf.squeeze(b), 512, 128))
+
+    return tf.reduce_sum(tf.abs(a- b))/(config.batch_size*config.max_phr_len) + 0.5*tf.reduce_sum(tf.abs(a_stft - b_stft))/(config.batch_size*config.max_phr_len) 
 
 def binary_cross(p,q):
     return -(p * tf.log(q + 1e-12) + (1 - p) * tf.log( 1 - q + 1e-12))
@@ -456,7 +528,7 @@ class AutoVC(Model):
             speaker_2 = np.repeat(speaker_index_2, config.batch_size)
             feed_dict = {self.input_placeholder: in_batch_mel, self.speaker_labels:speaker,self.speaker_labels_1:speaker_2, self.is_train: False}
             mel = sess.run(self.output, feed_dict=feed_dict)
-
+        
             out_batches_mel.append(mel)
         out_batches_mel = np.array(out_batches_mel)
 
@@ -961,7 +1033,7 @@ class MaskSep(Model):
         sess = tf.Session()
         self.load_model(sess, log_dir=config.log_dir)
 
-        file_list = [x for x in os.listdir(folder_name) if x in config.med_to_use]
+        file_list = [x for x in os.listdir(folder_name) if x.endswith('.wav') and x.split('_')[-2]=="Mix"]
 
         count = 0
 
@@ -1700,15 +1772,22 @@ class SSSynth(Model):
         returns the loss function for the model, based on the mode. 
         """
 
-        self.harm_loss = tf.reduce_sum(tf.abs(self.harm - self.harm_placeholder)*np.linspace(1.0,0.7,60))
+        # self.harm_loss = tf.reduce_sum(tf.abs(self.harm - self.harm_placeholder)*np.linspace(1.0,0.7,60))
+        # import pdb;pdb.set_trace()
 
-        self.ap_loss = tf.reduce_sum(tf.abs(self.ap - self.ap_placeholder))
+        self.harm_loss = mod_spec_loss(self.harm, self.harm_placeholder)
+
+        # self.ap_loss = tf.reduce_sum(tf.abs(self.ap - self.ap_placeholder))
+
+        self.ap_loss = mod_spec_loss(self.ap, self.ap_placeholder)
 
         self.vuv_loss = tf.reduce_mean(tf.reduce_mean(binary_cross(self.vuv_placeholder, self.vuv)))
 
         if config.f0_mode == "cont":
 
-            self.f0_loss = tf.reduce_sum(tf.abs(self.f0 - self.f0_placeholder)*(1-self.vuv_placeholder)) 
+            # self.f0_loss = tf.reduce_sum(tf.abs(self.f0 - self.f0_placeholder)*(1-self.vuv_placeholder)) 
+            self.f0_loss = mod_spec_loss(self.f0*(1-self.vuv_placeholder), self.f0_placeholder*(1-self.vuv_placeholder))
+
         elif config.f0_mode == "discrete":
             self.f0_loss = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(labels= self.f0_placeholder, logits = self.f0))
 
@@ -2707,8 +2786,9 @@ class SSSynth_Content(Model):
             vocals = np.array(audio)
 
         voc_stft = np.clip(abs(utils.stft(vocals, hopsize = config.hopsize, nfft = config.nfft, fs = config.fs, window = config.window)), 0.0, 1.0)
+        world_feats, f0 = utils.stft_to_feats(vocals.astype('double'))
 
-        return voc_stft
+        return voc_stft, world_feats
 
     def read_acap_file(self, file_name):
 
@@ -2733,12 +2813,22 @@ class SSSynth_Content(Model):
         """
         sess = tf.Session()
         self.load_model(sess, log_dir =  config.log_dir)
-        mel = self.read_wav_file(file_name)
+        mel, feats = self.read_wav_file(file_name)
 
-        if acap_file:
-            feats = self.read_acap_file(acap_file)
-        else:
-            feats = None
+        with open("./DG_take1_A1.f0") as fo_file:
+            f0 = fo_file.readlines()
+        f00 = np.array([[float(x.split('\t')[0]), float(x.split('\t')[0])+0.00580499, float(x.split('\t')[1])] for x in f0])
+
+        time_stamps = np.arange(0, len(feats)*config.hoptime, config.hoptime)
+        f01 = note2traj(f00, time_stamps)
+
+        y=69+12*np.log2(f01/440)
+        nans, x= utils.nan_helper(y)
+        naners=np.isinf(y)
+        y[nans]= np.interp(x(nans), x(~nans), y[~nans])
+        # y=[float(x-(min_note-1))/float(max_note-(min_note-1)) for x in y]
+        bye=np.array(y).reshape([len(y),1])
+        guy=np.array(naners).reshape([len(y),1])
 
 
         out_mel, out_f0, out_vuv = self.process_file(mel, sess)
@@ -2819,16 +2909,21 @@ class SSSynth_Content(Model):
 
             plt.show()
 
-        out_featss = np.concatenate((out_mel, out_f0, out_vuv), axis = -1)
+        import pdb;pdb.set_trace()
+        # np.expand_dims(smooth(np.squeeze(out_f0-12)), -1)[:out_vuv.shape[0]]
+
+        out_featss = np.concatenate((out_mel, bye, guy), axis = -1)
 
         audio_out = utils.feats_to_audio(out_featss) 
 
         sf.write('./{}_output.wav'.format(file_name.split('/')[-1][:-4]), audio_out, config.fs)
 
-        if acap_file:
+        # if acap_file:
 
-            audio = utils.feats_to_audio(feats) 
-            sf.write('./{}_ori.wav'.format(file_name.split('/')[-1][:-4]), audio, config.fs)
+        import pdb;pdb.set_trace()
+
+        audio = utils.feats_to_audio(feats) 
+        sf.write('./{}_ori.wav'.format(file_name.split('/')[-1][:-4]), audio, config.fs)
 
         np.save(file_name.split('/')[-1][:-4], out_mel)
 
@@ -3008,36 +3103,36 @@ class SSSynth_Content(Model):
         sess = tf.Session()
         self.load_model(sess, log_dir=config.log_dir)
 
-        file_list = [x for x in os.listdir(folder_name) if x in config.med_to_use]
+        file_list = [x for x in os.listdir(folder_name) if x.endswith('.wav') and "Mix" in x.split('_')[-1]]
 
         count = 0
 
         unprocessable = []
 
         for file_name in file_list:
-            try:
-                mel, feats, mixture = self.read_med_file(os.path.join(folder_name, file_name))
-                out_mel, out_f0, out_vuv = self.process_file(mel, sess)
-                out_featss = np.concatenate((out_mel, out_f0, out_vuv), axis = -1)
+            # try:
+            mel = self.read_wav_file(os.path.join(folder_name, file_name))
+            out_mel, out_f0, out_vuv = self.process_file(mel, sess)
+            out_featss = np.concatenate((out_mel, out_f0, out_vuv), axis = -1)
 
-                audio_out = utils.feats_to_audio(out_featss) 
+            audio_out = utils.feats_to_audio(out_featss) 
 
-                audio_ori = utils.feats_to_audio(feats) 
+            # audio_ori = utils.feats_to_audio(feats) 
 
-                sf.write(os.path.join(config.output_dir,'./{}_output.wav'.format(file_name.split('/')[-1][:-4])), audio_out, config.fs)
+            sf.write(os.path.join(config.output_dir,'./{}_output.wav'.format(file_name.split('/')[-1][:-4])), audio_out, config.fs)
 
-                sf.write(os.path.join(config.output_dir,'./{}_ori.wav'.format(file_name.split('/')[-1][:-4])), audio_ori, config.fs)
+                # sf.write(os.path.join(config.output_dir,'./{}_ori.wav'.format(file_name.split('/')[-1][:-4])), audio_ori, config.fs)
 
-                sf.write(os.path.join(config.output_dir,'./{}_mix.wav'.format(file_name.split('/')[-1][:-4])), mixture, config.fs)
+                # sf.write(os.path.join(config.output_dir,'./{}_mix.wav'.format(file_name.split('/')[-1][:-4])), mixture, config.fs)
 
-            except:
-                unprocessable.append(file_name)
+            # except:
+            #     unprocessable.append(file_name)
 
             count+=1
 
             utils.progress(count, len(file_list), "Files processed")
 
-            print(unprocessable)
+            # print(unprocessable)
 
 
 
