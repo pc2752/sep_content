@@ -85,7 +85,17 @@ def rock(audio):
     jojo = vamp.collect(audio, config.fs, "pyin:pyin", step_size=config.hopsize, output="notes")
 
     import pdb;pdb.set_trace()
-
+def open_f0_file(filename):
+    """
+    Returns a numpy array with the start-time, end-time and notes from the f0 file
+    """
+    with open(filename, "r") as lab_f:
+        phos = lab_f.readlines()
+        phos2 = [x.split() for x in phos]
+        popo = [float(x[0]) for x in phos2]
+        diff = popo[1] - popo[0]
+        phos3 = np.array([[float(x[0]), float(x[0]) + diff, float(x[1])] for x in phos2])
+    return phos3
 
 def process_lab_file(filename, stft_len, div_factor, pho_list):
 

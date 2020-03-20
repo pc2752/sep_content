@@ -11,6 +11,9 @@ import pandas as pd
 from random import randint
 import librosa
 import functools
+import sig_process
+import vamp_notes
+import midi_process
 
 import soundfile as sf
 
@@ -842,7 +845,7 @@ class MaskSep(Model):
             if acap_file:
                 audio_in = utils.griffinlim(abs_voc_stft)
         else:
-            audio_out = utils.istft(out_soprano[:pha_mix_stft.shape[0]], pha_mix_stft[:out_soprano.shape[0]], hopsize = config.hopsize, nfft = config.nfft, fs = config.fs, window = config.window)
+            audio_out = utils.istft(out_bass[:pha_mix_stft.shape[0]], pha_mix_stft[:out_soprano.shape[0]], hopsize = config.hopsize, nfft = config.nfft, fs = config.fs, window = config.window)
 
         audio_mix_out = utils.istft(abs_mix_stft, pha_mix_stft, hopsize = config.hopsize, nfft = config.nfft, fs = config.fs, window = config.window)
 
@@ -1034,8 +1037,7 @@ class MaskSep(Model):
 
         else:
             with tf.variable_scope('Mask_Model') as scope:
-                self.mix = tf.abs(tf.contrib.signal.stft(tf.squeeze(self.input_placeholder), frame_length=1024, frame_step=config.hopsize, fft_length=1024, window_fn=window))
-                self.mask = modules.enc_dec_mask(self.mix, self.is_train)
+                self.mask = modules.enc_dec_mask(self.input_placeholder, self.is_train)
 
 
 class Chain(Model):
@@ -2851,7 +2853,52 @@ class SSSynth_Content(Model):
         np.save(file_name.split('/')[-1][:-4], out_mel)
 
 
+    def test_file_wav_f0(self, file_name, f0_file):
+        """
+        Function to extract multi pitch from file. Currently supports only HDF5 files.
+        """
+        sess = tf.Session()
+        self.load_model(sess, log_dir =  config.log_dir)
 
+        mel = self.read_wav_file(file_name)
+
+        f0 = midi_process.open_f0_file(f0_file)
+
+        timestamps = np.arange(0, len(mel)*config.hoptime, config.hoptime)
+
+
+        f1 = vamp_notes.note2traj(f0, timestamps)
+
+        f1 = sig_process.process_pitch(f1[:,0])
+
+        out_mel, out_f0, out_vuv = self.process_file(mel, sess)
+
+        plot_dict = {"Spec Envelope": {"gt": mel[:,:-6], "op": out_mel[:,:-4]}, "Aperiodic":{"gt": mel[:,-6:-2], "op": out_mel[:,-4:]},\
+         "F0": {"gt": f1[:,0], "op": out_f0}, "Vuv": {"gt": f1[:,1], "op": out_vuv}}
+
+
+        self.plot_features(plot_dict)
+
+        synth = utils.query_yes_no("Synthesize output? ")
+
+        file_name = file_name.split('/')[-1]
+
+        if synth:
+
+            out_featss = np.concatenate((out_mel[:f1.shape[0]], f1[:,0:1], out_vuv[:f1.shape[0]]), axis = -1)
+
+            audio_out = utils.feats_to_audio(out_featss) 
+
+            sf.write(os.path.join(config.output_dir,'{}_SIN_YAM_f0_{}.wav'.format(file_name[:-4], f0_file.split('/')[-1])), audio_out, config.fs)
+
+        synth_ori = utils.query_yes_no("Synthesize with output f0? ")
+
+        if synth_ori:
+            out_featss = np.concatenate((out_mel, out_f0, out_vuv), axis = -1)
+
+            audio_out = utils.feats_to_audio(out_featss) 
+
+            sf.write('./{}_SIN_YAM_OutF0.wav'.format(file_name.split('/')[-1][:-4]), audio_out, config.fs)
 
     def test_file_hdf5(self, file_name, speaker_index=0, speaker_index_2=0):
         """
@@ -2895,63 +2942,94 @@ class SSSynth_Content(Model):
             audio = utils.feats_to_audio(mel) 
             sf.write('./{}_{}_ori.wav'.format(file_name[:-5], config.singers[speaker_index]), audio, config.fs)
 
+    def plot_features(self, feat_dict):
+        """
+        Plots a set of features, with the ground truth and the output as in the directory.
+        """
 
-    def plot_features(self, stft, feats, out_feats, out_f0, out_vuv):
+        for num, feature in enumerate(feat_dict.keys()):
+            plt.figure(num)
+            gt = feat_dict[feature]['gt']
+            op = feat_dict[feature]['op']
+            if len(gt.shape) == 1 or gt.shape[-1] == 1:
+                plt.plot(gt, label = "Ground Truth {}".format(feature))
+                plt.plot(op, label = "Output {}".format(feature))
+                if "notes" in feat_dict[feature].keys():
+                    plt.plot(feat_dict[feature]["notes"], label = "Notes")
+                plt.legend()
+            else:
+                ax1 = plt.subplot(211)
 
-        plt.figure(1)
+                plt.imshow(gt.T,aspect='auto',origin='lower')
 
+                ax1.set_title("Ground Truth {}".format(feature, fontsize=10))
 
-        ax1 = plt.subplot(311)
+                ax2 =plt.subplot(212, sharex = ax1, sharey = ax1)
 
-        plt.imshow(np.log(stft.T),aspect='auto',origin='lower')
+                ax2.set_title("Output {}".format(feature, fontsize=10))
 
-        ax1.set_title("Input STFT", fontsize=10)
+                plt.imshow(op.T,aspect='auto',origin='lower')
 
-        ax1 = plt.subplot(312)
+                ax2.set_title("Output {}".format(feature, fontsize=10))
 
-        plt.imshow(feats[:,:64].T,aspect='auto',origin='lower')
-
-        ax1.set_title("Ground Truth Vocoder Features", fontsize=10)
-
-        ax3 = plt.subplot(313, sharex = ax1, sharey = ax1)
-
-        ax3.set_title("Output Vocoder Features", fontsize=10)
-
-        plt.imshow(out_feats[:,:64].T,aspect='auto',origin='lower')
-
-
-        plt.figure(4)
-
-        ax1 = plt.subplot(211)
-
-        plt.plot(feats[:,-1])
-
-        ax1.set_title("Ground Truth VUV", fontsize=10)
-
-        ax2 = plt.subplot(212, sharex = ax1, sharey = ax1)
-
-        plt.plot(out_vuv)
-
-        ax1.set_title("Output VUV", fontsize=10)
-
-        if config.f0_mode == "cont":
-
-            plt.figure(2)
-            f0_output = np.squeeze(out_f0)
-            f0_output = f0_output*(1-feats[:,-1])
-            f0_output[f0_output == 0] = np.nan
-            # import pdb;pdb.set_trace()
-            plt.plot(f0_output, label = "Predicted Value")
-            f0_gt = feats[:,-2]
-            f0_gt = f0_gt*(1-feats[:,-1])
-            f0_gt[f0_gt == 0] = np.nan
-            plt.plot(f0_gt, label="Ground Truth")
-            f0_difference = np.nan_to_num(abs(f0_gt-f0_output))
-            f0_greater = np.where(f0_difference>config.f0_threshold)
-            diff_per = f0_greater[0].shape[0]/len(f0_output)
-            plt.suptitle("Percentage correct = "+'{:.3%}'.format(1-diff_per))
-            plt.legend()
+        
         plt.show()
+    # def plot_features(self, stft, feats, out_feats, out_f0, out_vuv):
+
+    #     plt.figure(1)
+
+
+    #     ax1 = plt.subplot(311)
+
+    #     plt.imshow(np.log(stft.T),aspect='auto',origin='lower')
+
+    #     ax1.set_title("Input STFT", fontsize=10)
+
+    #     ax1 = plt.subplot(312)
+
+    #     plt.imshow(feats[:,:64].T,aspect='auto',origin='lower')
+
+    #     ax1.set_title("Ground Truth Vocoder Features", fontsize=10)
+
+    #     ax3 = plt.subplot(313, sharex = ax1, sharey = ax1)
+
+    #     ax3.set_title("Output Vocoder Features", fontsize=10)
+
+    #     plt.imshow(out_feats[:,:64].T,aspect='auto',origin='lower')
+
+
+    #     plt.figure(4)
+
+    #     ax1 = plt.subplot(211)
+
+    #     plt.plot(feats[:,-1])
+
+    #     ax1.set_title("Ground Truth VUV", fontsize=10)
+
+    #     ax2 = plt.subplot(212, sharex = ax1, sharey = ax1)
+
+    #     plt.plot(out_vuv)
+
+    #     ax1.set_title("Output VUV", fontsize=10)
+
+    #     if config.f0_mode == "cont":
+
+    #         plt.figure(2)
+    #         f0_output = np.squeeze(out_f0)
+    #         f0_output = f0_output*(1-feats[:,-1])
+    #         f0_output[f0_output == 0] = np.nan
+    #         # import pdb;pdb.set_trace()
+    #         plt.plot(f0_output, label = "Predicted Value")
+    #         f0_gt = feats[:,-2]
+    #         f0_gt = f0_gt*(1-feats[:,-1])
+    #         f0_gt[f0_gt == 0] = np.nan
+    #         plt.plot(f0_gt, label="Ground Truth")
+    #         f0_difference = np.nan_to_num(abs(f0_gt-f0_output))
+    #         f0_greater = np.where(f0_difference>config.f0_threshold)
+    #         diff_per = f0_greater[0].shape[0]/len(f0_output)
+    #         plt.suptitle("Percentage correct = "+'{:.3%}'.format(1-diff_per))
+    #         plt.legend()
+    #     plt.show()
 
 
     def process_file(self, mel, sess):

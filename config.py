@@ -44,19 +44,19 @@ ref_level_db = 20
 
 voice_dir = '../consolidated_research/voice_32/'
 backing_dir = './backing/'
-output_dir = './output_med_last/'
+output_dir = './output_unison_yam/'
 output_dir_np = './output_med_np/'
 
 
 med_to_use = ['MusicDelta_Gospel.wav', 'FacesOnFilm_WaitingForGa.wav', 'Lushlife_ToynbeeSuite.wav', 'HezekiahJones_BorrowedHeart.wav', 'BrandonWebster_DontHearAThing.wav', 'AimeeNorwich_Child.wav', 'ClaraBerryAndWooldog_AirTraffic.wav']
 
-mode = "mask"
+mode = "sep"
 enc_mode = "conv"
 f0_mode = 'cont'
 content_enc_mode = 'lstm'
 content_dec_mode = 'lstm'
 
-use_content = False
+use_content = True
 use_singer = False
 use_complex = False
 mul_mask = True

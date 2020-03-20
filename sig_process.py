@@ -124,3 +124,21 @@ def get_feats(audio):
     # hcqt = np.swapaxes(hcqt, 0,1)
 
     return stft
+
+def f0_to_hertz(f0):
+
+    return 69+12*np.log2(f0/440)
+
+def process_pitch(f0):
+    y = f0_to_hertz(f0)
+    # import pdb;pdb.set_trace()
+    # y = hertz_to_new_base(f0)
+    nans, x= utils.nan_helper(y)
+    naners=np.isinf(y)
+    y[nans]= np.interp(x(nans), x(~nans), y[~nans])
+    # y=[float(x-(min_note-1))/float(max_note-(min_note-1)) for x in y]
+    y=np.array(y).reshape([len(y),1])
+    guy=np.array(naners).reshape([len(y),1])
+    y=np.concatenate((y,guy),axis=-1)
+
+    return y
