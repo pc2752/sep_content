@@ -2745,7 +2745,7 @@ class SSSynth_Content(Model):
 
         feats, f0 = utils.stft_to_feats(vocals)
 
-        return feats
+        return feats, f0
 
     def test_file_wav(self, file_name, acap_file=None):
         """
@@ -2755,102 +2755,115 @@ class SSSynth_Content(Model):
         self.load_model(sess, log_dir =  config.log_dir)
         mel = self.read_wav_file(file_name)
 
+        feats, f0 = self.read_acap_file(file_name)
+
+        timestamps = np.arange(0, len(f0)*config.hoptime, config.hoptime)
+
+        # timestamps = np.arange(0, len(mel)*config.hoptime, config.hoptime)
+
+        fo = [[x,y] for x,y in zip(timestamps, f0)]
+
+        utils.list_to_file(fo, os.path.join(config.output_dir, '{}_SIN_YAM_SACf0.f0'.format(file_name.split('/')[-1][:-4])))
+
         if acap_file:
-            feats = self.read_acap_file(acap_file)
+            feats, f0 = self.read_acap_file(acap_file)
         else:
             feats = None
 
 
         out_mel, out_f0, out_vuv = self.process_file(mel, sess)
 
-        plt.figure(1)
+        # plt.figure(1)
 
-        if acap_file:
+        # if acap_file:
 
-            ax1 = plt.subplot(311)
+        #     ax1 = plt.subplot(311)
 
-            plt.imshow(np.log(mel.T),aspect='auto',origin='lower')
+        #     plt.imshow(np.log(mel.T),aspect='auto',origin='lower')
 
-            ax1.set_title("Input STFT", fontsize=10)
+        #     ax1.set_title("Input STFT", fontsize=10)
 
-            ax2 = plt.subplot(312, sharex = ax1)
+        #     ax2 = plt.subplot(312, sharex = ax1)
 
-            plt.imshow(feats[:,:64].T,aspect='auto',origin='lower')
+        #     plt.imshow(feats[:,:64].T,aspect='auto',origin='lower')
 
-            ax2.set_title("Ground Truth Vocoder Features", fontsize=10)
+        #     ax2.set_title("Ground Truth Vocoder Features", fontsize=10)
 
-            ax3 = plt.subplot(313, sharex = ax1, sharey = ax2)
+        #     ax3 = plt.subplot(313, sharex = ax1, sharey = ax2)
 
-            plt.imshow(out_mel[:feats.shape[0]].T,aspect='auto',origin='lower')
+        #     plt.imshow(out_mel[:feats.shape[0]].T,aspect='auto',origin='lower')
 
-            ax3.set_title("Output Vocoder Features", fontsize=10)
-
-
-            plt.figure(4)
+        #     ax3.set_title("Output Vocoder Features", fontsize=10)
 
 
-            ax1 = plt.subplot(211)
-
-            plt.plot(feats[:,-1])
-
-            ax1.set_title("Ground Truth VUV", fontsize=10)
-
-            ax2 = plt.subplot(212, sharex = ax1, sharey = ax1)
-
-            plt.plot(out_vuv)
-
-            ax1.set_title("Output VUV", fontsize=10)
+        #     plt.figure(4)
 
 
-            plt.figure(3)
-            f0_output = out_f0[:feats.shape[0],0]
+        #     ax1 = plt.subplot(211)
 
-            f0_output = f0_output*(1-out_vuv[:feats.shape[0],0])
-            f0_output[f0_output == 0] = np.nan
+        #     plt.plot(feats[:,-1])
 
+        #     ax1.set_title("Ground Truth VUV", fontsize=10)
 
-            plt.plot(f0_output, label = "Predicted Value")
-            f0_gt = feats[:,-2]
-            f0_gt = f0_gt*(1-feats[:,-1])
-            f0_gt[f0_gt == 0] = np.nan
-            plt.plot(f0_gt, label="Ground Truth")
-            f0_difference = np.nan_to_num(abs(f0_gt-f0_output))
-            f0_greater = np.where(f0_difference>config.f0_threshold)
-            diff_per = f0_greater[0].shape[0]/len(f0_output)
-            plt.suptitle("Percentage correct = "+'{:.3%}'.format(1-diff_per))
-            plt.legend()
+        #     ax2 = plt.subplot(212, sharex = ax1, sharey = ax1)
 
-            plt.show()
+        #     plt.plot(out_vuv)
 
-        else:
+        #     ax1.set_title("Output VUV", fontsize=10)
 
 
-            ax1 = plt.subplot(211)
+        #     plt.figure(3)
+        #     f0_output = out_f0[:feats.shape[0],0]
 
-            plt.imshow(np.log(mel.T),aspect='auto',origin='lower')
+        #     f0_output = f0_output*(1-out_vuv[:feats.shape[0],0])
+        #     f0_output[f0_output == 0] = np.nan
 
-            ax1.set_title("Input STFT", fontsize=10)
 
-            ax1 = plt.subplot(212)
+        #     plt.plot(f0_output, label = "Predicted Value")
+        #     f0_gt = feats[:,-2]
+        #     f0_gt = f0_gt*(1-feats[:,-1])
+        #     f0_gt[f0_gt == 0] = np.nan
+        #     plt.plot(f0_gt, label="Ground Truth")
+        #     f0_difference = np.nan_to_num(abs(f0_gt-f0_output))
+        #     f0_greater = np.where(f0_difference>config.f0_threshold)
+        #     diff_per = f0_greater[0].shape[0]/len(f0_output)
+        #     plt.suptitle("Percentage correct = "+'{:.3%}'.format(1-diff_per))
+        #     plt.legend()
 
-            plt.imshow(out_mel.T,aspect='auto',origin='lower')
+        #     plt.show()
 
-            ax1.set_title("Output Vocoder Features", fontsize=10)
+        # else:
 
-            plt.show()
 
-        out_featss = np.concatenate((out_mel, out_f0, out_vuv), axis = -1)
+        #     ax1 = plt.subplot(211)
+
+        #     plt.imshow(np.log(mel.T),aspect='auto',origin='lower')
+
+        #     ax1.set_title("Input STFT", fontsize=10)
+
+        #     ax1 = plt.subplot(212)
+
+        #     plt.imshow(out_mel.T,aspect='auto',origin='lower')
+
+        #     ax1.set_title("Output Vocoder Features", fontsize=10)
+
+        #     plt.show()
+
+        out_featss = np.concatenate((out_mel[:feats.shape[0]], feats[:out_mel.shape[0], -2:]), axis = -1)
 
         audio_out = utils.feats_to_audio(out_featss) 
 
-        sf.write('./{}_output.wav'.format(file_name.split('/')[-1][:-4]), audio_out, config.fs)
+        sf.write(os.path.join(config.output_dir,'{}_SIN_YAM_SACf0.wav'.format(file_name.split('/')[-1][:-4])), audio_out, config.fs)
 
-        if acap_file:
+        audio_out = utils.feats_to_audio(feats) 
 
-            audio = utils.feats_to_audio(feats) 
-            sf.write('./{}_ori.wav'.format(file_name.split('/')[-1][:-4]), audio, config.fs)
+        sf.write(os.path.join(config.output_dir,'{}_SIN_YAM_resynth.wav'.format(file_name.split('/')[-1][:-4])), audio_out, config.fs)
+        # if acap_file:
 
-        np.save(file_name.split('/')[-1][:-4], out_mel)
+        #     audio = utils.feats_to_audio(feats) 
+        #     sf.write('./{}_ori.wav'.format(file_name.split('/')[-1][:-4]), audio, config.fs)
+
+        # np.save(file_name.split('/')[-1][:-4], out_mel)
 
 
     def test_file_wav_f0(self, file_name, f0_file):
@@ -2862,9 +2875,20 @@ class SSSynth_Content(Model):
 
         mel = self.read_wav_file(file_name)
 
-        f0 = midi_process.open_f0_file(f0_file)
+        feats, fo = self.read_acap_file(file_name)
 
-        timestamps = np.arange(0, len(mel)*config.hoptime, config.hoptime)
+        timestamps = np.arange(0, len(fo)*config.hoptime, config.hoptime)
+
+        # timestamps = np.arange(0, len(mel)*config.hoptime, config.hoptime)
+
+        # fo = [[x,y] for x,y in zip(timestamps, fo)]
+
+
+        with open(os.path.join(config.output_dir, '{}_SIN_YAM_SACf0.f0'.format(file_name.split('/')[-1][:-4])), "w") as fo_file:
+            for x, y in zip(timestamps, fo):
+                fo_file.write("{} {}\n".format(x,y))
+
+        f0 = midi_process.open_f0_file(f0_file)
 
 
         f1 = vamp_notes.note2traj(f0, timestamps)
@@ -2873,32 +2897,47 @@ class SSSynth_Content(Model):
 
         out_mel, out_f0, out_vuv = self.process_file(mel, sess)
 
-        plot_dict = {"Spec Envelope": {"gt": mel[:,:-6], "op": out_mel[:,:-4]}, "Aperiodic":{"gt": mel[:,-6:-2], "op": out_mel[:,-4:]},\
-         "F0": {"gt": f1[:,0], "op": out_f0}, "Vuv": {"gt": f1[:,1], "op": out_vuv}}
+        # plot_dict = {"Spec Envelope": {"gt": mel[:,:-6], "op": out_mel[:,:-4]}, "Aperiodic":{"gt": mel[:,-6:-2], "op": out_mel[:,-4:]},\
+        #  "F0": {"gt": f1[:,0], "op": out_f0}, "Vuv": {"gt": f1[:,1], "op": out_vuv}}
 
 
-        self.plot_features(plot_dict)
-
-        synth = utils.query_yes_no("Synthesize output? ")
+        # self.plot_features(plot_dict)
 
         file_name = file_name.split('/')[-1]
 
-        if synth:
+        # synth_sac = utils.query_yes_no("Synthesize with SAC f0? ")
 
-            out_featss = np.concatenate((out_mel[:f1.shape[0]], f1[:,0:1], out_vuv[:f1.shape[0]]), axis = -1)
+        # if synth_sac:
 
-            audio_out = utils.feats_to_audio(out_featss) 
+        out_featss = np.concatenate((out_mel[:feats.shape[0]], feats[:out_mel.shape[0], -2:]), axis = -1)
 
-            sf.write(os.path.join(config.output_dir,'{}_SIN_YAM_f0_{}.wav'.format(file_name[:-4], f0_file.split('/')[-1])), audio_out, config.fs)
+        audio_out = utils.feats_to_audio(out_featss) 
 
-        synth_ori = utils.query_yes_no("Synthesize with output f0? ")
+        sf.write(os.path.join(config.output_dir,'{}_SIN_YAM_SACf0.wav'.format(file_name[:-4])), audio_out, config.fs)
 
-        if synth_ori:
-            out_featss = np.concatenate((out_mel, out_f0, out_vuv), axis = -1)
+        # synth = utils.query_yes_no("Synthesize output? ")
 
-            audio_out = utils.feats_to_audio(out_featss) 
+        
 
-            sf.write('./{}_SIN_YAM_OutF0.wav'.format(file_name.split('/')[-1][:-4]), audio_out, config.fs)
+        # if synth:
+
+        out_featss = np.concatenate((out_mel[:f1.shape[0]], f1[:,0:1], out_vuv[:f1.shape[0]]), axis = -1)
+
+        audio_out = utils.feats_to_audio(out_featss) 
+
+        sf.write(os.path.join(config.output_dir,'{}_SIN_YAM_f0_{}.wav'.format(file_name[:-4], f0_file.split('/')[-1])), audio_out, config.fs)
+
+        # synth_ori = utils.query_yes_no("Synthesize with output f0? ")
+
+        # if synth_ori:
+        #     out_featss = np.concatenate((out_mel, out_f0, out_vuv), axis = -1)
+
+        #     audio_out = utils.feats_to_audio(out_featss) 
+
+        #     sf.write(os.path.join(config.output_dir,'{}_SIN_YAM_Outf0.wav'.format(file_name[:-4])), audio_out, config.fs)
+
+
+
 
     def test_file_hdf5(self, file_name, speaker_index=0, speaker_index_2=0):
         """
