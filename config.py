@@ -18,7 +18,7 @@ wav_dir_casas_ross = '../datasets/casas_rossinyol/'
 
 fs = 32000
 nfft = 1024
-hopsize = 256
+hopsize = 160
 hoptime = hopsize/fs
 window = np.hanning(nfft)
 
@@ -44,13 +44,13 @@ ref_level_db = 20
 
 voice_dir = '../consolidated_research/voice_32/'
 backing_dir = './backing/'
-output_dir = './output_unison_yam/'
+output_dir = './'
 output_dir_np = './output_med_np/'
 
 
 med_to_use = ['MusicDelta_Gospel.wav', 'FacesOnFilm_WaitingForGa.wav', 'Lushlife_ToynbeeSuite.wav', 'HezekiahJones_BorrowedHeart.wav', 'BrandonWebster_DontHearAThing.wav', 'AimeeNorwich_Child.wav', 'ClaraBerryAndWooldog_AirTraffic.wav']
 
-mode = "sep"
+mode = "voc"
 enc_mode = "conv"
 f0_mode = 'cont'
 content_enc_mode = 'lstm'
@@ -66,7 +66,7 @@ use_griff = False
 
 
 
-if mode == "sep":
+if mode == "sep" or mode == "voc":
 	if enc_mode == "wave":
 		if use_content:
 			print("Invalid Combination")
@@ -166,7 +166,7 @@ out_lstm = 512
 code_sam = 16
 filter_len = 5
 
-if mode == "sep":
+if mode == "sep" or mode == "voc":
 	if use_f0_emb:
 		output_features = 66
 	else:

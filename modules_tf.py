@@ -515,6 +515,8 @@ def decoder(emb, singer_label, is_train):
 
         inputs = tf.concat([embo, singer_label], axis = -1)
 
+        # import pdb;pdb.set_trace()
+
         
 
         lstm_op_1 = RNN(inputs, scope = "Decode_1")

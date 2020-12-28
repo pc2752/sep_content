@@ -23,6 +23,22 @@ from tensorflow.contrib.signal.python.ops import window_ops
 
 window = functools.partial(window_ops.hann_window, periodic=True)
 
+
+def smooth(x,window_len=11,window='hanning'):
+
+
+
+    s=np.r_[x[window_len-1:0:-1],x,x[-2:-window_len-1:-1]]
+    #print(len(s))
+    if window == 'flat': #moving average
+        w=np.ones(window_len,'d')
+    else:
+        w=eval('np.'+window+'(window_len)')
+
+    y=np.convolve(w/w.sum(),s,mode='valid')
+    return y
+
+
 def binary_cross(p,q):
     return -(p * tf.log(q + 1e-12) + (1 - p) * tf.log( 1 - q + 1e-12))
 
@@ -2515,6 +2531,9 @@ class SSSynth_Content(Model):
         self.stft_placeholder = tf.placeholder(tf.float32, shape=(config.batch_size, config.max_phr_len, config.stft_features),
                                            name='stft_placeholder')  
 
+        self.stft_placeholder_1 = tf.placeholder(tf.float32, shape=(config.batch_size, config.stft_features),
+                                           name='stft_placeholder_1')  
+
         self.speaker_labels = tf.placeholder(tf.float32, shape=(config.batch_size),name='singer_placeholder')
         self.speaker_onehot_labels = tf.one_hot(indices=tf.cast(self.speaker_labels, tf.int32), depth = config.num_speakers)
 
@@ -2751,27 +2770,53 @@ class SSSynth_Content(Model):
         """
         Function to extract multi pitch from file. Currently supports only HDF5 files.
         """
+        # import pdb;pdb.set_trace()
         sess = tf.Session()
         self.load_model(sess, log_dir =  config.log_dir)
         mel = self.read_wav_file(file_name)
+        out_mel, out_f0, out_vuv, out_emb = self.process_file(mel, sess)
+        out_f0[:,:] = 62.0 + np.clip(np.random.rand(out_f0.shape[0], out_f0.shape[1]), 0.0, 0.6)
+        plt.plot(out_f0)
+        plt.show()
+        # feats, f0 = self.read_acap_file(file_name)
+        # out_featss = np.concatenate((out_mel[:feats.shape[0]], feats[:out_mel.shape[0], -2:]), axis = -1)
+        # audio_out = utils.feats_to_audio(out_featss) 
+        # sf.write(os.path.join(config.output_dir,'{}_SIN_YAM_SACf0.wav'.format(file_name.split('/')[-1][:-4])), audio_out, config.fs)
 
-        feats, f0 = self.read_acap_file(file_name)
-
-        timestamps = np.arange(0, len(f0)*config.hoptime, config.hoptime)
-
-        # timestamps = np.arange(0, len(mel)*config.hoptime, config.hoptime)
-
-        fo = [[x,y] for x,y in zip(timestamps, f0)]
-
-        utils.list_to_file(fo, os.path.join(config.output_dir, '{}_SIN_YAM_SACf0.f0'.format(file_name.split('/')[-1][:-4])))
-
-        if acap_file:
-            feats, f0 = self.read_acap_file(acap_file)
-        else:
-            feats = None
+        out_featss = np.concatenate((out_mel, out_f0, out_vuv), axis = -1)
+        audio_out = utils.feats_to_audio(out_featss) 
+        sf.write(os.path.join(config.output_dir,'{}_SIN_YAM_Dnoise.wav'.format(file_name.split('/')[-1][:-4])), audio_out, config.fs)
 
 
-        out_mel, out_f0, out_vuv = self.process_file(mel, sess)
+# out_f1 = np.copy(out_f0)
+# out_f1[30:60] = 64.0
+# out_f1[79:135] = 64.0
+# out_f1[186:366] = 64.0
+# out_f1[285:429] = 62.0
+# out_f1[370:429] = 62.0
+# out_f1[429:706] = 66.0
+# out_f1[710:762] = 60.0
+# out_f1[844:881] = 64.0
+# out_f1[893:923] = 64.0
+# out_f1[944:983] = 60.0
+#         
+
+#         timestamps = np.arange(0, len(f0)*config.hoptime, config.hoptime)
+
+#         # timestamps = np.arange(0, len(mel)*config.hoptime, config.hoptime)
+
+#         fo = [[x,y] for x,y in zip(timestamps, f0)]
+
+#         # utils.list_to_file(fo, os.path.join(config.output_dir, '{}_SIN_YAM_SACf0.f0'.format(file_name.split('/')[-1][:-4])))
+# # 
+#         if acap_file:
+#             feats, f0 = self.read_acap_file(acap_file)
+#         else:
+#             feats = None
+
+
+
+
 
         # plt.figure(1)
 
@@ -2849,15 +2894,9 @@ class SSSynth_Content(Model):
 
         #     plt.show()
 
-        out_featss = np.concatenate((out_mel[:feats.shape[0]], feats[:out_mel.shape[0], -2:]), axis = -1)
+        # audio_out = utils.feats_to_audio(feats) 
 
-        audio_out = utils.feats_to_audio(out_featss) 
-
-        sf.write(os.path.join(config.output_dir,'{}_SIN_YAM_SACf0.wav'.format(file_name.split('/')[-1][:-4])), audio_out, config.fs)
-
-        audio_out = utils.feats_to_audio(feats) 
-
-        sf.write(os.path.join(config.output_dir,'{}_SIN_YAM_resynth.wav'.format(file_name.split('/')[-1][:-4])), audio_out, config.fs)
+        # sf.write(os.path.join(config.output_dir,'{}_SIN_YAM_resynth.wav'.format(file_name.split('/')[-1][:-4])), audio_out, config.fs)
         # if acap_file:
 
         #     audio = utils.feats_to_audio(feats) 
@@ -2884,9 +2923,9 @@ class SSSynth_Content(Model):
         # fo = [[x,y] for x,y in zip(timestamps, fo)]
 
 
-        with open(os.path.join(config.output_dir, '{}_SIN_YAM_SACf0.f0'.format(file_name.split('/')[-1][:-4])), "w") as fo_file:
-            for x, y in zip(timestamps, fo):
-                fo_file.write("{} {}\n".format(x,y))
+        # with open(os.path.join(config.output_dir, '{}_SIN_YAM_SACf0.f0'.format(file_name.split('/')[-1][:-4])), "w") as fo_file:
+        #     for x, y in zip(timestamps, fo):
+        #         fo_file.write("{} {}\n".format(x,y))
 
         f0 = midi_process.open_f0_file(f0_file)
 
@@ -2918,7 +2957,7 @@ class SSSynth_Content(Model):
         # synth = utils.query_yes_no("Synthesize output? ")
 
         
-
+        f2 = f1[:,0:1] + np.random.rand(f1[:,0:1].shape[0])[:,np.newaxis]
         # if synth:
 
         out_featss = np.concatenate((out_mel[:f1.shape[0]], f1[:,0:1], out_vuv[:f1.shape[0]]), axis = -1)
@@ -2927,6 +2966,12 @@ class SSSynth_Content(Model):
 
         sf.write(os.path.join(config.output_dir,'{}_SIN_YAM_f0_{}.wav'.format(file_name[:-4], f0_file.split('/')[-1])), audio_out, config.fs)
 
+
+        out_featss = np.concatenate((out_mel[:f1.shape[0]], f2, out_vuv[:f1.shape[0]]), axis = -1)
+
+        audio_out = utils.feats_to_audio(out_featss) 
+
+        sf.write(os.path.join(config.output_dir,'{}_SIN_YAM_f0_{}_noise.wav'.format(file_name[:-4], f0_file.split('/')[-1])), audio_out, config.fs)
         # synth_ori = utils.query_yes_no("Synthesize with output f0? ")
 
         # if synth_ori:
@@ -3086,6 +3131,10 @@ class SSSynth_Content(Model):
         stat_file.close()  
 
         mel = np.clip(mel, 0.0, 1.0)
+        # emb = mel.mean(axis=0)
+        # emb = np.repeat(emb[np.newaxis,:], config.batch_size, axis=0)
+
+        # emb = np
 
 
         in_batches_mel, nchunks_in = utils.generate_overlapadd(mel)
@@ -3093,19 +3142,26 @@ class SSSynth_Content(Model):
         out_batches_mel = []
         out_f0 = []
         out_vuv = []
+        out_emb = []
 
         for in_batch_mel in in_batches_mel :
             # speaker = np.repeat(speaker_index, config.batch_size)
             # speaker_2 = np.repeat(speaker_index_2, config.batch_size)
             feed_dict = {self.stft_placeholder: in_batch_mel, self.is_train: False}
-            mel, f0, vuv = sess.run([self.output_stft, self.f0, self.vuv], feed_dict=feed_dict)
+            mel, f0, vuv, emb = sess.run([self.output_stft, self.f0, self.vuv, self.content_embedding_stft], feed_dict=feed_dict)
             out_batches_mel.append(mel)
             out_f0.append(f0)
             out_vuv.append(vuv)
+            out_emb.append(emb)
 
         out_batches_mel = np.array(out_batches_mel)
+        out_emb = np.array(out_emb)
+
+        out_emb = np.swapaxes(out_emb, 1,2)
 
         out_batches_mel = utils.overlapadd(out_batches_mel,nchunks_in)
+
+        out_emb = utils.overlapadd(out_emb,nchunks_in, overlap=0)
         out_f0 = utils.overlapadd(np.array(out_f0), nchunks_in)
         out_vuv = utils.overlapadd(np.array(out_vuv), nchunks_in)
 
@@ -3118,7 +3174,7 @@ class SSSynth_Content(Model):
 
         out_vuv = np.round(out_vuv)
 
-        return out_batches_mel, out_f0, out_vuv
+        return out_batches_mel, out_f0, out_vuv, out_emb
 
     def read_med_file(self, file_name):
 
@@ -3201,6 +3257,8 @@ class SSSynth_Content(Model):
             self.content_embedding_stft = modules.content_encoder_sep(self.stft_placeholder, self.is_train)
 
         with tf.variable_scope('stft_decoder') as scope: 
+            # haha = tf.reduce_mean(self.stft_placeholder, axis =1)
+            # hoho = tf.tile(tf.reshape(self.stft_placeholder_1,[config.batch_size,1,-1]),[1,config.max_phr_len,1])
             self.output_stft_1 = modules.decoder_sep(self.content_embedding_stft, self.stft_placeholder, self.is_train)
 
         with tf.variable_scope('stft_post_net') as scope: 
